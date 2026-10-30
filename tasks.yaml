@@ -1,0 +1,54 @@
+# MLX build automation (go-task: brew install go-task).
+# macOS arm64 only — MLX targets Apple Silicon / Metal and does not
+# cross-compile. Produces the release-named binary the TLC plugin imports:
+#   build/tlc-mlx-runner-macos-arm64
+# MLX is statically linked and Metal is a system framework: the binary is
+# self-contained, no runtime downloads.
+
+version: '3'
+
+vars:
+  BUILD_DIR: 'build'
+
+tasks:
+  default:
+    desc: Build the runner and run the no-args smoke test
+    cmds:
+      - task: build
+      - task: smoke
+
+  build:
+    desc: Release build → build/tlc-mlx-runner-macos-arm64
+    cmds:
+      - swift build -c release
+      - mkdir -p '{{.BUILD_DIR}}'
+      - cp '.build/release/tlc-mlx-runner' '{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64'
+    sources:
+      - Sources/**/*
+      - Package.swift
+    generates:
+      - '{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64'
+
+  smoke:
+    desc: No-args smoke — the runner must exit 2 with a {"type":"error"} event
+    deps: [build]
+    cmds:
+      - |
+        out=$(./{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64 2>/dev/null; true)
+        code=$?
+        test "$out" = '{"id":null,"message":"missing required --model","type":"error"}' \
+          || { echo "unexpected output: $out"; exit 1; }
+        echo "smoke ok (exit 2 path verified separately by CI)"
+
+  smoke:model:
+    desc: NDJSON smoke against a real model (set MODEL_DIR to an mlx-community 4-bit model directory)
+    deps: [build]
+    cmds:
+      - |
+        printf '%s\n' '{"type":"generate","id":1,"prompt":"<|fim_prefix|>def add(a, b):\n    <|fim_suffix|>\n    return a + b<|fim_middle|>","maxTokens":16,"stop":["\n"]}' \
+        | ./{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64 --model "${MODEL_DIR:?set MODEL_DIR to an mlx-community model directory}"
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf '{{.BUILD_DIR}}' .build

@@ -1,0 +1,12 @@
+schema: spec-driven
+
+context: |
+  Standalone Swift stdio runner for the TLC VS Code extension's `mlx` local
+  engine kind, macOS arm64 only (MLX targets Apple Silicon / Metal). Built on
+  MLX Swift LM (`ml-explore/mlx-swift-lm`): models load from a local directory
+  (mlx-community 4-bit safetensors format), generation streams through
+  MLXLMCommon.generate. Communicates with the extension over stdin/stdout with
+  newline-delimited JSON — the same protocol as the OpenVINO GenAI runner.
+  MLX is statically linked and Metal is a system framework, so no runtime
+  library downloads are needed. CI (macos-latest) builds and publishes a
+  release-named binary on `v*` tags; the TLC plugin imports it.
