@@ -21,10 +21,32 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v5
+      # App version from git (same scheme as the OpenVINO runner's CMake):
+      # exact tag on HEAD (with -dirty), otherwise
+      # <tag>-<N>-g<sha>+<branch>.<build-time> ("detached" without a branch).
+      - name: generate app version
+        run: |
+          TAG=$(git describe --tags --exact-match --dirty 2>/dev/null || true)
+          if [ -n "$TAG" ]; then
+            VERSION="$TAG"
+          else
+            DESCRIBE=$(git describe --tags --long --always --dirty 2>/dev/null || true)
+            BRANCH=$(git branch --show-current 2>/dev/null || true)
+            [ -n "$BRANCH" ] || BRANCH=detached
+            [ -n "$DESCRIBE" ] || DESCRIBE=unknown
+            VERSION="${DESCRIBE}+${BRANCH}.$(date +%Y%m%d%H%M%S)"
+          fi
+          printf '/// Generated at build time — app version from git.\nlet appVersion = "%s"\n' "$VERSION" \
+            > Sources/tlc-mlx-runner/Version.swift
       - name: build
         run: swift build -c release
       - name: rename binary
-        run: cp .build/release/tlc-mlx-runner tlc-mlx-runner-macos-arm64
+        run: |
+          cp .build/release/tlc-mlx-runner tlc-mlx-runner-macos-arm64
+          # MLX loads the compiled Metal kernels from the SwiftPM resource
+          # bundle next to the binary.
+          rm -rf mlx-swift_Cmlx.bundle
+          cp -R .build/release/mlx-swift_Cmlx.bundle .
       - name: loader smoke (no args must emit an error event and exit 2)
         run: |
           set +e
@@ -33,11 +55,15 @@ jobs:
           set -e
           test "$code" -eq 2 || { echo "runner exited with $code, expected 2"; exit 1; }
           echo "$out" | grep -q '"type":"error"' || { echo "runner did not emit the error event: $out"; exit 1; }
+      - name: version smoke (--version must emit a version event and exit 0)
+        run: ./tlc-mlx-runner-macos-arm64 --version | grep -q '"type":"version"'
       - name: upload artifact
         uses: actions/upload-artifact@v5
         with:
           name: tlc-mlx-runner-macos-arm64
-          path: tlc-mlx-runner-macos-arm64
+          path: |
+            tlc-mlx-runner-macos-arm64
+            mlx-swift_Cmlx.bundle
           retention-days: 30
 
   release:

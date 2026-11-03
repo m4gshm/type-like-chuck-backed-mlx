@@ -18,7 +18,11 @@ The repository SHALL produce a self-contained macOS arm64 runner binary named `t
 - **THEN** CI builds the binary, smoke-tests it, and attaches `tlc-mlx-runner-macos-arm64` to a GitHub release
 
 ### Requirement: NDJSON stdio protocol
-The runner SHALL read one request per stdin line as a JSON object (`generate` with `id`/`prompt`/`maxTokens`/`stop`, `cancel`, `shutdown`) and SHALL write newline-delimited JSON events to stdout: one `token` event per generated text piece, one `done` event at the end of a generation, and `error` events on failures. Human-readable logs SHALL go to stderr only. With missing or invalid arguments the runner SHALL emit one `error` event and exit with code 2.
+The runner SHALL read one request per stdin line as a JSON object (`generate` with `id`/`prompt`/`maxTokens`/`stop`, `cancel`, `shutdown`) and SHALL write newline-delimited JSON events to stdout: a `version` event for `--version`, one `token` event (without id) per generated text piece, one `done` event at the end of a generation, and `error` events on failures. Human-readable logs SHALL go to stderr only. With missing or invalid arguments the runner SHALL emit one `error` event and exit with code 2.
+
+#### Scenario: Version
+- **WHEN** the runner is started with `--version`
+- **THEN** a `{"type":"version"}` event is printed and the runner exits 0 without loading a model
 
 #### Scenario: Streaming generation
 - **WHEN** a `generate` request is written to the runner's stdin
@@ -28,13 +32,25 @@ The runner SHALL read one request per stdin line as a JSON object (`generate` wi
 - **WHEN** the runner logs diagnostics during generation
 - **THEN** the log lines appear on stderr and stdout remains valid NDJSON
 
-#### Scenario: Sequential requests
+#### Scenario: Queued requests
 - **WHEN** a `generate` request arrives while a generation is in progress
-- **THEN** the runner emits an `error` event (`busy`) and the running generation is unaffected
+- **THEN** it is queued and served after the active generation, in arrival order
 
-#### Scenario: Cancel
+#### Scenario: Cancel active generation
 - **WHEN** a `cancel` request arrives mid-generation
 - **THEN** generation stops and a `done` event with `finishReason:"cancel"` follows
+
+#### Scenario: Cancel queued request
+- **WHEN** a `cancel` request arrives with the id of a queued request
+- **THEN** that request is answered immediately with a `done` event with `finishReason:"cancel"` and is never generated
+
+#### Scenario: Shutdown drains the queue
+- **WHEN** a `shutdown` request arrives
+- **THEN** every queued request is answered with a `done` event with `finishReason:"cancel"`, the active generation is cancelled, and the runner exits 0
+
+#### Scenario: Failed generation
+- **WHEN** generation fails with an error
+- **THEN** the runner emits one `error` event with the request id and no `done` event follows
 
 #### Scenario: No arguments
 - **WHEN** the runner binary is started without `--model`
