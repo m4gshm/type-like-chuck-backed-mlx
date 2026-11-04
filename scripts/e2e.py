@@ -435,7 +435,7 @@ def bench(runs=BENCH_RUNS, sizes=None):
         if not os.path.isfile(os.path.join(out, "config.json")):
             print(f"bench: downloading {name} ({repo})", flush=True)
             download_model(out, repo)
-        print(f"bench: {name} on gpu", flush=True)
+        print(f"bench: {name}", flush=True)
         r = Runner(model=out)
         t0 = time.monotonic()
         ready_ev = r.wait_for(lambda e: e.get("type") == "ready", timeout=None)
