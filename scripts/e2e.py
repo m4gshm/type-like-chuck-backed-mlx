@@ -383,48 +383,69 @@ def bench_generate(r, run_id):
 
 
 def _sys_info():
-    """Collect device characteristics (macOS only)."""
+    """Host characteristics for the bench header: computer model, CPU, RAM, OS."""
     info = {}
-    # RAM
-    try:
-        out = subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip()
-        info["ram"] = f"{int(out) // (1 << 30)} GB"
-    except Exception:
-        info["ram"] = "?"
-    # Chip
-    try:
-        out = subprocess.check_output(
-            ["system_profiler", "SPHardwareDataType"], text=True)
-        for line in out.splitlines():
-            line = line.strip()
-            if "Chip:" in line:
-                info["chip"] = line.split(":", 1)[1].strip()
-                break
-    except Exception:
-        info["chip"] = "?"
-    # GPU
-    try:
-        out = subprocess.check_output(
-            ["system_profiler", "SPDisplaysDataType"], text=True)
-        for line in out.splitlines():
-            line = line.strip()
-            if line.startswith("Metal Support:"):
-                info["metal"] = line.split(":", 1)[1].strip()
-                break
-        # First GPU line
-        for line in out.splitlines():
-            line = line.strip()
-            if line and not line.startswith((" ", "Metal", "Resolution", "VRAM", "Display", "PCIe", "Frame buffer", "Total:", "")) and ":" in line:
-                info["gpu"] = line.split(":", 1)[1].strip()
-                break
-    except Exception:
-        info["gpu"] = "?"
-    # macOS version
-    try:
-        out = subprocess.check_output(["sw_vers", "-productVersion"], text=True).strip()
-        info["os"] = out
-    except Exception:
-        info["os"] = "?"
+
+    def first_line(*args):
+        try:
+            return subprocess.check_output(args, text=True).strip()
+        except Exception:
+            return None
+
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.check_output(["system_profiler", "SPHardwareDataType"], text=True)
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("Model Name:"):
+                    info["host"] = line.split(":", 1)[1].strip()
+                elif line.startswith("Chip:"):
+                    info["cpu"] = line.split(":", 1)[1].strip()
+        except Exception:
+            pass
+        ram = first_line("sysctl", "-n", "hw.memsize")
+        if ram and ram.isdigit():
+            info["ram"] = f"{int(ram) // (1 << 30)} GB"
+        ver = first_line("sw_vers", "-productVersion")
+        if ver:
+            info["os"] = f"macOS {ver}"
+    elif os.name == "nt":
+        out = first_line("powershell", "-NoProfile", "-Command",
+                         "(Get-CimInstance Win32_ComputerSystem).Model")
+        if out:
+            info["host"] = out
+        out = first_line("powershell", "-NoProfile", "-Command",
+                         "(Get-CimInstance Win32_Processor).Name")
+        if out:
+            info["cpu"] = out.splitlines()[0].strip()
+        out = first_line("powershell", "-NoProfile", "-Command",
+                         "[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)")
+        if out and out.isdigit():
+            info["ram"] = f"{out} GB"
+        out = first_line("powershell", "-NoProfile", "-Command",
+                         "(Get-CimInstance Win32_OperatingSystem).Caption")
+        if out:
+            info["os"] = out
+    else:
+        try:
+            with open("/sys/devices/virtual/dmi/id/product_name") as f:
+                info["host"] = f.read().strip()
+        except Exception:
+            pass
+        out = first_line("sh", "-c", "lscpu | sed -n 's/^Model name:\\s*//p'")
+        if out:
+            info["cpu"] = out.splitlines()[0].strip()
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        info["ram"] = f"{int(line.split()[1]) // (1 << 20)} GB"
+                        break
+        except Exception:
+            pass
+        out = first_line("sh", "-c", ". /etc/os-release && echo $PRETTY_NAME")
+        if out:
+            info["os"] = out
     return info
 
 
@@ -455,8 +476,9 @@ def bench(runs=BENCH_RUNS, sizes=None):
     # Print device characteristics before the final table
     sysinfo = _sys_info()
     ctx = ready_ev.get("ctx", "?") if ready_ev else "?"
-    print(f"\ndevice={sysinfo.get('chip', '?')}  gpu={sysinfo.get('gpu', '?')}  ram={sysinfo.get('ram', '?')}  "
-          f"ctx={ctx}  runs={runs}  maxTokens={BENCH_MAX_TOKENS}  os={sysinfo.get('os', '?')}")
+    print(f"\n== gpu ==  host={sysinfo.get('host', '?')}  cpu={sysinfo.get('cpu', '?')}  "
+          f"ram={sysinfo.get('ram', '?')}  os={sysinfo.get('os', '?')}  ctx={ctx}  "
+          f"runs={runs}  maxTokens={BENCH_MAX_TOKENS}")
     w = max((len(name) for name, *_rest in rows), default=len("model"))
     print(f"{'model':<{w}}  load_s  ttft_s  gen_s  tokens  tok_s")
     for name, l, ttft, total, tokens in rows:
