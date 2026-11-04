@@ -46,13 +46,34 @@ Requires macOS arm64 (MLX does not cross-compile) and
 [go-task](https://taskfile.dev):
 
 ```sh
-task -t tasks.yaml build        # → build/tlc-mlx-runner-macos-arm64
-task -t tasks.yaml smoke        # no-args JSON smoke
-task -t tasks.yaml smoke:version  # --version smoke
-MODEL_DIR=/path/to/model task -t tasks.yaml smoke:model   # NDJSON session
+task build            # → build/tlc-mlx-runner-macos-arm64
+task smoke            # no-args JSON smoke
+task smoke:version    # --version smoke
+MODEL_DIR=/path/to/model task smoke:model   # NDJSON session
 ```
 
 CI (`.github/workflows/runner.yml`) builds on `macos-latest`, runs the smoke
 test, and publishes the binary as a GitHub release on `v*` tags. The TLC
 plugin imports it from the latest release (or a pinned `RUNNER_VERSION` tag)
 when packing its `.vsix`.
+
+## Benchmark
+
+`task e2e:bench` measures model load time and inference speed (FIM prompt,
+64 tokens, steady state of 2 runs) across the 4-bit/8-bit Qwen2.5-Coder line:
+
+```text
+== gpu ==  host=MacBook Pro  cpu=Apple M4 Pro  ram=48 GB  os=macOS 26.7.1  ctx=0  runs=2  maxTokens=64
+model      load_s  ttft_s  gen_s  tokens  tok_s
+0.5B-4bit     0.7    0.03   0.19     64   345.8
+1.5B-4bit     0.4    0.05   0.39     64   165.8
+3B-4bit       0.5    0.10   0.66     64    96.6
+0.5B-8bit     0.3    0.02   0.24     64   263.5
+1.5B-8bit     0.5    0.05   0.58     64   110.7
+3B-8bit       0.9    0.10   1.09     64    58.7
+7B-4bit       0.9    0.21   1.35     64    47.6
+7B-8bit       1.6    0.21   2.31     64    27.7
+```
+
+`load_s` — time to the `ready` event, `ttft_s` — time to first token,
+`tok_s` — generation throughput. Filter models with `SIZES=3B-4bit task e2e:bench`.
