@@ -36,8 +36,6 @@ tasks:
       - swift build -c release
       - mkdir -p '{{.BUILD_DIR}}'
       - cp '.build/release/tlc-mlx-runner' '{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64'
-      - rm -rf '{{.BUILD_DIR}}/mlx-swift_Cmlx.bundle'
-      - cp -R '.build/release/mlx-swift_Cmlx.bundle' '{{.BUILD_DIR}}/'
     sources:
       - Sources/**/*
       - Package.swift
@@ -91,3 +89,10 @@ tasks:
     desc: Remove build artifacts
     cmds:
       - rm -rf '{{.BUILD_DIR}}' .build
+
+  ci:
+    desc: Build the runner and run smoke tests (CI entry point)
+    cmds:
+      - task: build
+      - task: smoke
+      - task: smoke:version
