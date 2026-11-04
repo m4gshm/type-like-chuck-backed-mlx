@@ -45,6 +45,10 @@ BENCH_MODELS = [
      os.path.join(CACHE_DIR, "models", "qwen2.5-coder-1.5b-8bit")),
     ("3B-8bit", "mlx-community/Qwen2.5-Coder-3B-Instruct-8bit",
      os.path.join(CACHE_DIR, "models", "qwen2.5-coder-3b-8bit")),
+    ("7B-4bit", "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
+     os.path.join(CACHE_DIR, "models", "qwen2.5-coder-7b-4bit")),
+    ("7B-8bit", "mlx-community/Qwen2.5-Coder-7B-Instruct-8bit",
+     os.path.join(CACHE_DIR, "models", "qwen2.5-coder-7b-8bit")),
 ]
 BENCH_MAX_TOKENS = 64
 BENCH_RUNS = 2
@@ -592,8 +596,8 @@ def main():
     p.add_argument("--out", default=DEFAULT_MODEL_DIR)
     p = cmd.add_parser("bench")
     p.add_argument("--runs", type=int, default=BENCH_RUNS, help="generation runs per model (steady state is reported)")
-    p.add_argument("--sizes", default="0.5B-4bit,1.5B-4bit,3B-4bit,0.5B-8bit,1.5B-8bit,3B-8bit",
-                   help="comma-separated model sizes to bench (model dirs: E2E_0_5B_4bit_DIR / E2E_1_5B_4bit_DIR / E2E_3B_4bit_DIR / E2E_0_5B_8bit_DIR / E2E_1_5B_8bit_DIR / E2E_3B_8bit_DIR)")
+    p.add_argument("--sizes", default="0.5B-4bit,1.5B-4bit,3B-4bit,7B-4bit,0.5B-8bit,1.5B-8bit,3B-8bit,7B-8bit",
+                   help="comma-separated model sizes to bench (model dirs: E2E_0_5B_4bit_DIR / E2E_1_5B_4bit_DIR / E2E_3B_4bit_DIR / E2E_7B_4bit_DIR / E2E_0_5B_8bit_DIR / E2E_1_5B_8bit_DIR / E2E_3B_8bit_DIR / E2E_7B_8bit_DIR)")
     args = ap.parse_args()
 
     if args.cmd == "download-model":

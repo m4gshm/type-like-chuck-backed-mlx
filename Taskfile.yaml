@@ -72,7 +72,7 @@ tasks:
       - python3 scripts/e2e.py download-model
 
   e2e:bench:
-    desc: E2E benchmark — model load time + inference speed for 4-bit/8-bit 0.5B/1.5B/3B (SIZES=a,b filters)
+    desc: E2E benchmark — model load time + inference speed for 4-bit/8-bit 0.5B/1.5B/3B/7B (SIZES=a,b filters)
     deps: [build]
     cmds:
       - python3 scripts/e2e.py bench${SIZES:+ --sizes "$SIZES"}
