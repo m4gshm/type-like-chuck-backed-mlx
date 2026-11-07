@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import MLXLMCommon
 import MLXLLM
 import MLXHuggingFace
@@ -179,8 +180,8 @@ final class Worker: @unchecked Sendable {
             st.shuttingDown = true
             let dropped = st.queue.map(\.id)
             st.queue.removeAll()
-            if st.generation != nil {
-                st.cancelledId = st.activeId
+            if let active = st.activeId {
+                st.cancelledId = active
                 st.generation?.cancel()
             }
             return dropped
@@ -234,12 +235,23 @@ final class Worker: @unchecked Sendable {
 
     private func generate(_ request: Request, container: ModelContainer) async {
         var finishReason = "stop"
+        // cancel/shutdown may flag the request in the window before its
+        // generation task is created — nothing was there to cancel(), so
+        // resolve it here instead of generating.
+        if state.withLock({ $0.cancelledId == request.id }) {
+            Wire.emit(["type": "done", "id": request.id, "finishReason": "cancel"])
+            return
+        }
         do {
             // Prepare inside the container's isolation, hand the sendable
             // stream out and consume it here — the loop drives itself in
             // its own task.
             let stream: AsyncStream<Generation> = try await container.perform { context in
-                let input = try await context.processor.prepare(input: UserInput(prompt: request.prompt))
+                // Raw tokenization, no chat template: the plugin sends fully
+                // rendered FIM prompts; wrapping them in a chat breaks base
+                // models and deflects instruct ones.
+                let tokens = context.tokenizer.encode(text: request.prompt, addSpecialTokens: false)
+                let input = LMInput(text: .init(tokens: MLXArray(tokens)))
                 return try MLXLMCommon.generate(
                     input: input,
                     parameters: GenerateParameters(maxTokens: request.maxTokens),

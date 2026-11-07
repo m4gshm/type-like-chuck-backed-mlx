@@ -27,27 +27,28 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_DIR = os.path.join(ROOT, "build")
 CACHE_DIR = os.path.join(ROOT, ".cache")
 
-DEFAULT_MODEL_REPO = "mlx-community/Qwen2.5-Coder-0.5B-Instruct-4bit"
+DEFAULT_MODEL_REPO = "mlx-community/Qwen2.5-Coder-0.5B-4bit"
 DEFAULT_MODEL_DIR = os.path.join(CACHE_DIR, "models", "qwen2.5-coder-0.5b-4bit")
 
-# Bench models: Qwen2.5-Coder in mlx-community 4-bit and 8-bit, three sizes
-# each — quantization effect on load time vs inference speed.
+# Bench models: Qwen2.5-Coder (base, not Instruct — the runner speaks raw FIM)
+# in mlx-community 4-bit and 8-bit, sizes 0.5B/1.5B/3B/7B — quantization effect
+# on load time vs inference speed.
 BENCH_MODELS = [
-    ("0.5B-4bit", "mlx-community/Qwen2.5-Coder-0.5B-Instruct-4bit",
+    ("0.5B-4bit", "mlx-community/Qwen2.5-Coder-0.5B-4bit",
      os.path.join(CACHE_DIR, "models", "qwen2.5-coder-0.5b-4bit")),
-    ("1.5B-4bit", "mlx-community/Qwen2.5-Coder-1.5B-Instruct-4bit",
+    ("1.5B-4bit", "mlx-community/Qwen2.5-Coder-1.5B-4bit",
      os.path.join(CACHE_DIR, "models", "qwen2.5-coder-1.5b-4bit")),
-    ("3B-4bit", "mlx-community/Qwen2.5-Coder-3B-Instruct-4bit",
+    ("3B-4bit", "mlx-community/Qwen2.5-Coder-3B-4bit",
      os.path.join(CACHE_DIR, "models", "qwen2.5-coder-3b-4bit")),
-    ("0.5B-8bit", "mlx-community/Qwen2.5-Coder-0.5B-Instruct-8bit",
+    ("0.5B-8bit", "mlx-community/Qwen2.5-Coder-0.5B-8bit",
      os.path.join(CACHE_DIR, "models", "qwen2.5-coder-0.5b-8bit")),
-    ("1.5B-8bit", "mlx-community/Qwen2.5-Coder-1.5B-Instruct-8bit",
+    ("1.5B-8bit", "mlx-community/Qwen2.5-Coder-1.5B-8bit",
      os.path.join(CACHE_DIR, "models", "qwen2.5-coder-1.5b-8bit")),
-    ("3B-8bit", "mlx-community/Qwen2.5-Coder-3B-Instruct-8bit",
+    ("3B-8bit", "mlx-community/Qwen2.5-Coder-3B-8bit",
      os.path.join(CACHE_DIR, "models", "qwen2.5-coder-3b-8bit")),
-    ("7B-4bit", "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
+    ("7B-4bit", "mlx-community/Qwen2.5-Coder-7B-4bit",
      os.path.join(CACHE_DIR, "models", "qwen2.5-coder-7b-4bit")),
-    ("7B-8bit", "mlx-community/Qwen2.5-Coder-7B-Instruct-8bit",
+    ("7B-8bit", "mlx-community/Qwen2.5-Coder-7B-8bit",
      os.path.join(CACHE_DIR, "models", "qwen2.5-coder-7b-8bit")),
 ]
 BENCH_MAX_TOKENS = 64
@@ -367,11 +368,11 @@ def test_queue(model):
 
 # ---------------------------------------------------------------- bench
 
-def bench_generate(r, run_id):
+def bench_generate(r, run_id, prompt):
     """One fixed-length FIM generation; returns (ttft_s, total_s, tokens)."""
     start = len(r.events)
     t0 = time.monotonic()
-    r.send({"type": "generate", "id": run_id, "prompt": FIM_PROMPT, "maxTokens": BENCH_MAX_TOKENS})
+    r.send({"type": "generate", "id": run_id, "prompt": prompt, "maxTokens": BENCH_MAX_TOKENS})
     r.wait_for(lambda e: e.get("type") == "token", timeout=120, since=start)
     ttft = time.monotonic() - t0
     done = r.wait_for(lambda e: e.get("type") == "done", timeout=300, since=start)
@@ -449,8 +450,9 @@ def _sys_info():
     return info
 
 
-def bench(runs=BENCH_RUNS, sizes=None):
+def bench(runs=BENCH_RUNS, sizes=None, prompt_kind="fixture"):
     """Download the bench models, measure model load time and inference speed on each."""
+    prompt = fixture_fim_prompt() if prompt_kind == "fixture" else FIM_PROMPT
     rows = []
     ready_ev = None
     for name, repo, out in BENCH_MODELS:
@@ -467,7 +469,7 @@ def bench(runs=BENCH_RUNS, sizes=None):
         load_s = time.monotonic() - t0
         gens = []
         for i in range(runs):
-            gens.append(bench_generate(r, i))
+            gens.append(bench_generate(r, i, prompt))
         r.close()
         ttft, total, tokens = gens[-1]  # steady state
         rows.append((name, load_s, ttft, total, tokens))
@@ -478,7 +480,7 @@ def bench(runs=BENCH_RUNS, sizes=None):
     ctx = ready_ev.get("ctx", "?") if ready_ev else "?"
     print(f"\n== gpu ==  host={sysinfo.get('host', '?')}  cpu={sysinfo.get('cpu', '?')}  "
           f"ram={sysinfo.get('ram', '?')}  os={sysinfo.get('os', '?')}  ctx={ctx}  "
-          f"runs={runs}  maxTokens={BENCH_MAX_TOKENS}")
+          f"runs={runs}  maxTokens={BENCH_MAX_TOKENS}  prompt={len(prompt)} chars")
     w = max((len(name) for name, *_rest in rows), default=len("model"))
     print(f"{'model':<{w}}  load_s  ttft_s  gen_s  tokens  tok_s")
     for name, l, ttft, total, tokens in rows:
@@ -528,6 +530,82 @@ def download_model(out_dir, repo=DEFAULT_MODEL_REPO):
 
 
 # ---------------------------------------------------------------- manual client
+
+# ---------------------------------------------------------------- real file FIM
+
+# The plugin's qwen2 template stop list and context clamps (src/templates/builtins.ts).
+QWEN2_RESERVED = ["<|fim_prefix|>", "<|fim_suffix|>", "<|fim_middle|>", "<|fim_pad|>",
+                  "<|repo_name|>", "<|file_sep|>", "<|end_of_text|>", "<|endoftext|>"]
+PLUGIN_PREFIX_MAX = 8000
+PLUGIN_SUFFIX_MAX = 2000
+
+
+def mask_reserved(text):
+    for token in QWEN2_RESERVED:
+        text = text.replace(token, token[0] + " " + token[1:])
+    return text
+
+
+def fixture_fim_prompt():
+    """Plugin-shaped FIM prompt over the bundled fixture: the cursor sits on the
+    whitespace-only line 96 inside a var block, so the prefill is a realistic
+    ~1.5–2k tokens (prefix/suffix clamps mirror the plugin defaults)."""
+    with open(os.path.join(ROOT, "scripts", "fixtures", "api_test.go"), encoding="utf-8") as f:
+        lines = f.read().split("\n")
+    li, col = 95, 2
+    prefix = mask_reserved("\n".join(lines[:li]) + "\n" + lines[li][:col])[-PLUGIN_PREFIX_MAX:]
+    suffix = mask_reserved(lines[li][col:] + "\n" + "\n".join(lines[li + 1:]))[:PLUGIN_SUFFIX_MAX]
+    return "<|fim_prefix|>" + prefix + "<|fim_suffix|>" + suffix + "<|fim_middle|>"
+
+
+def real_file(model, file, line, column, max_tokens):
+    """Raw FIM against a real source file at a 1-based line/column cursor.
+
+    Mirrors the plugin's prompt (qwen2 markers, 8000/2000 clamp, reserved-token
+    masking) but does NOT send a newline stop — the point is to observe the
+    backend's natural (possibly multi-line) completion.
+    """
+    with open(file, encoding="utf-8") as f:
+        lines = f.read().split("\n")
+    li = max(0, min(line - 1, len(lines) - 1))
+    col = min(max(1, column) - 1, len(lines[li]))
+    prefix = mask_reserved("\n".join(lines[:li]) + "\n" + lines[li][:col])[-PLUGIN_PREFIX_MAX:]
+    suffix = mask_reserved(lines[li][col:] + "\n" + "\n".join(lines[li + 1:]))[:PLUGIN_SUFFIX_MAX]
+    prompt = "<|fim_prefix|>" + prefix + "<|fim_suffix|>" + suffix + "<|fim_middle|>"
+    next_line = lines[li + 1] if li + 1 < len(lines) else ""
+
+    r = Runner(model=model)
+    expect_ready(r, model)
+    r.send({"type": "generate", "id": 1, "prompt": prompt, "maxTokens": max_tokens, "stop": QWEN2_RESERVED})
+    done = r.wait_for(lambda e: e.get("type") == "done", timeout=300)
+    tokens = [e for e in r.events if e.get("type") == "token"]
+    text = "".join(t["text"] for t in tokens)
+    r.close()
+
+    completion_lines = text.split("\n")
+    print("\n" + "=" * 72)
+    print(f"file: {file} @ {line}:{column} (cursor line: {lines[li][:col]!r})")
+    print(f"next line in file: {next_line!r}")
+    print(f"completion: {len(text)} chars, {len(completion_lines)} lines, finishReason={done.get('finishReason') if done else 'TIMEOUT'}")
+    stripped = text.strip()
+    next_trim = next_line.strip()
+    if not stripped:
+        print("overlap: empty completion")
+    elif stripped == next_trim:
+        print("overlap: completion duplicates the next line exactly")
+    elif next_trim and stripped.startswith(next_trim):
+        print(f"overlap: completion extends the next line by {stripped[len(next_trim):]!r}")
+    else:
+        common = os.path.commonprefix([stripped, next_trim])
+        share = round(100 * len(common) / max(1, len(stripped)))
+        print(f"overlap: common prefix with the next line is {len(common)} chars (~{share}% of the completion): {common!r}")
+    print("-" * 72)
+    print(text)
+    print("=" * 72)
+    ok = check(done is not None, "done event received")
+    ok &= check(not any(tok in text for tok in QWEN2_RESERVED), "no FIM control tokens leak into output")
+    return ok
+
 
 def manual_client(model):
     if not model:
@@ -613,11 +691,19 @@ def main():
     for name in ("test", "manual"):
         p = cmd.add_parser(name)
         p.add_argument("--model", default=os.environ.get("MODEL_DIR"), help="mlx-community model directory")
+    p = cmd.add_parser("real-file")
+    p.add_argument("--file", required=True, help="source file to complete")
+    p.add_argument("--line", type=int, default=1, help="1-based cursor line")
+    p.add_argument("--column", type=int, default=1, help="1-based cursor column")
+    p.add_argument("--max-tokens", type=int, default=256)
+    p.add_argument("--model", default=os.environ.get("MODEL_DIR"), help="mlx-community model directory")
     p = cmd.add_parser("download-model")
     p.add_argument("--repo", default=DEFAULT_MODEL_REPO)
     p.add_argument("--out", default=DEFAULT_MODEL_DIR)
     p = cmd.add_parser("bench")
     p.add_argument("--runs", type=int, default=BENCH_RUNS, help="generation runs per model (steady state is reported)")
+    p.add_argument("--prompt", choices=("fixture", "tiny"), default="fixture",
+                   help="fixture = plugin-shaped FIM from the bundled fixture (~1.5–2k token prefill); tiny = one-line FIM")
     p.add_argument("--sizes", default="0.5B-4bit,1.5B-4bit,3B-4bit,7B-4bit,0.5B-8bit,1.5B-8bit,3B-8bit,7B-8bit",
                    help="comma-separated model sizes to bench (model dirs: E2E_0_5B_4bit_DIR / E2E_1_5B_4bit_DIR / E2E_3B_4bit_DIR / E2E_7B_4bit_DIR / E2E_0_5B_8bit_DIR / E2E_1_5B_8bit_DIR / E2E_3B_8bit_DIR / E2E_7B_8bit_DIR)")
     args = ap.parse_args()
@@ -626,9 +712,11 @@ def main():
         download_model(args.out, args.repo)
         print(f"model at {args.out}")
     elif args.cmd == "bench":
-        bench(args.runs, args.sizes.split(","))
+        bench(args.runs, args.sizes.split(","), args.prompt)
     elif args.cmd == "manual":
         manual_client(args.model)
+    elif args.cmd == "real-file":
+        sys.exit(0 if real_file(args.model, args.file, args.line, args.column, args.max_tokens) else 1)
     else:
         run_suite(args.model)
 

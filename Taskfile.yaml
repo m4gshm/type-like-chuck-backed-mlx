@@ -36,6 +36,9 @@ tasks:
       - swift build -c release
       - mkdir -p '{{.BUILD_DIR}}'
       - cp '.build/release/tlc-mlx-runner' '{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64'
+      # SwiftPM resource bundles (MLX default metallib etc.) must sit next to
+      # the binary: without them the runner fails to load Metal at model load.
+      - cp -R '.build/release/'*.bundle '{{.BUILD_DIR}}/'
     sources:
       - Sources/**/*
       - Package.swift
@@ -84,6 +87,12 @@ tasks:
       - |
         printf '%s\n' '{"type":"generate","id":1,"prompt":"<|fim_prefix|>def add(a, b):\n    <|fim_suffix|>\n    return a + b<|fim_middle|>","maxTokens":16,"stop":["\n"]}' \
         | ./{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64 --model "${MODEL_DIR:?set MODEL_DIR to an mlx-community model directory}"
+
+  real:file:
+    desc: Raw FIM against the bundled fixture (FILE, LINE, COLUMN override it) — observes the natural, possibly multi-line completion
+    deps: [build]
+    cmds:
+      - python3 scripts/e2e.py real-file --file "${FILE:-scripts/fixtures/api_test.go}" --line "${LINE:-96}" --column "${COLUMN:-9}" --max-tokens "${MAX_TOKENS:-256}"${MODEL_DIR:+ --model "$MODEL_DIR"}
 
   clean:
     desc: Remove build artifacts

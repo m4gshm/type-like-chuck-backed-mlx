@@ -57,22 +57,46 @@ test, and publishes the binary as a GitHub release on `v*` tags. The TLC
 plugin imports it from the latest release (or a pinned `RUNNER_VERSION` tag)
 when packing its `.vsix`.
 
+## Real file experiment
+
+`task real:file` runs raw FIM against the bundled fixture
+(`scripts/fixtures/api_test.go`, cursor at line 96, column 9) with the plugin's
+prompt shape (qwen2 markers, 8000/2000 clamp, reserved-token masking) but no
+newline stop — it shows the backend's natural, possibly multi-line completion
+plus an overlap report against the line after the cursor. `FILE`, `LINE`,
+`COLUMN`, `MAX_TOKENS`, `MODEL_DIR` override the defaults.
+
 ## Benchmark
 
-`task e2e:bench` measures model load time and inference speed (FIM prompt,
-64 tokens, steady state of 2 runs) across the 4-bit/8-bit Qwen2.5-Coder line:
+`task e2e:bench` measures model load time and inference speed across the
+4-bit/8-bit Qwen2.5-Coder line. The default prompt is a plugin-shaped FIM over
+the bundled fixture (4815 chars ≈ 1.5–2k token prefill — what the plugin
+actually sends); `--prompt tiny` switches to the one-line FIM.
+64 generated tokens, steady state of 2 runs:
 
 ```text
-== gpu ==  host=MacBook Pro  cpu=Apple M4 Pro  ram=48 GB  os=macOS 26.7.1  ctx=0  runs=2  maxTokens=64
+== gpu ==  host=MacBook Pro  cpu=Apple M4 Pro  ram=48 GB  os=macOS 26.7.1  ctx=0  runs=2  maxTokens=64  prompt=4815 chars
 model      load_s  ttft_s  gen_s  tokens  tok_s
-0.5B-4bit     0.7    0.03   0.19     64   345.8
-1.5B-4bit     0.4    0.05   0.39     64   165.8
-3B-4bit       0.5    0.10   0.66     64    96.6
-0.5B-8bit     0.3    0.02   0.24     64   263.5
-1.5B-8bit     0.5    0.05   0.58     64   110.7
-3B-8bit       0.9    0.10   1.09     64    58.7
-7B-4bit       0.9    0.21   1.35     64    47.6
-7B-8bit       1.6    0.21   2.31     64    27.7
+0.5B-4bit     0.4    0.32   0.53     52    98.0
+1.5B-4bit     0.4    0.95   1.33     60    45.1
+3B-4bit       0.5    2.00   2.65     62    23.4
+0.5B-8bit     0.5    0.31   0.58     53    91.3
+1.5B-8bit     0.5    0.98   1.57     49    31.3
+3B-8bit       0.9    2.02   3.07     59    19.2
+7B-4bit       1.2    4.75   6.04     62    10.3
+7B-8bit       2.4    5.06   7.31     62     8.5
+
+(one-line prompt, same host:)
+== gpu ==  host=MacBook Pro  cpu=Apple M4 Pro  ram=48 GB  os=macOS 26.7.1  ctx=0  runs=2  maxTokens=64  prompt=78 chars
+model      load_s  ttft_s  gen_s  tokens  tok_s
+0.5B-4bit     0.4    0.02   0.09     30   321.4
+1.5B-4bit     0.4    0.05   0.36     64   179.3
+3B-4bit       0.5    0.07   0.63     64   101.3
+0.5B-8bit     0.5    0.03   0.24     64   261.3
+1.5B-8bit     0.5    0.05   0.12     11    88.4
+3B-8bit       0.9    0.07   1.05     64    60.8
+7B-4bit       1.1    0.12   0.74     32    43.3
+7B-8bit       2.3    0.12   2.25     64    28.4
 ```
 
 `load_s` — time to the `ready` event, `ttft_s` — time to first token,

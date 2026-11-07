@@ -31,7 +31,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: tlc-mlx-runner-macos-arm64
-          path: build/tlc-mlx-runner-macos-arm64
+          path: build/*
           retention-days: 30
 
   e2e:
@@ -64,6 +64,14 @@ jobs:
         with:
           merge-multiple: true
           path: dist
+      # One archive per release asset: the binary plus the SwiftPM resource
+      # bundles (metallib) it needs next to it at runtime; directories cannot
+      # be release assets.
+      - name: pack release asset
+        run: |
+          cd dist
+          tar -czf tlc-mlx-runner-macos-arm64.tar.gz tlc-mlx-runner-macos-arm64 *.bundle
+          rm tlc-mlx-runner-macos-arm64 *.bundle
       - name: create release
         uses: softprops/action-gh-release@v2
         with:
