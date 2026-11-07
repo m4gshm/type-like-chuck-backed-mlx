@@ -380,7 +380,7 @@ def bench_generate(r, run_id, prompt):
     tokens = sum(1 for e in r.events[start:] if e.get("type") == "token")
     if done.get("finishReason") not in ("length", "stop"):
         raise AssertionError(f"bench run {run_id} failed: {done}")
-    return ttft, total, tokens
+    return ttft, total, tokens, done.get("promptTokens")
 
 
 def _sys_info():
@@ -451,9 +451,11 @@ def _sys_info():
 
 
 def bench(runs=BENCH_RUNS, sizes=None, prompt_kind="fixture"):
-    """Download the bench models, measure model load time and inference speed on each."""
-    prompt = fixture_fim_prompt() if prompt_kind == "fixture" else FIM_PROMPT
+    """Download the bench models, measure model load time and inference speed on
+    each. ttft_s carries prefill; gen_s/tok_s are decode-only."""
+    prompt, prefix_chars, suffix_chars = fixture_prompt_parts() if prompt_kind == "fixture" else (FIM_PROMPT, len(FIM_PROMPT), 0)
     rows = []
+    prompt_tokens = None
     ready_ev = None
     for name, repo, out in BENCH_MODELS:
         if sizes and name not in sizes:
@@ -471,16 +473,19 @@ def bench(runs=BENCH_RUNS, sizes=None, prompt_kind="fixture"):
         for i in range(runs):
             gens.append(bench_generate(r, i, prompt))
         r.close()
-        ttft, total, tokens = gens[-1]  # steady state
-        rows.append((name, load_s, ttft, total, tokens))
+        ttft, total, tokens, prompt_tokens = gens[-1]  # steady state
+        decode = max(total - ttft, 1e-3)
+        rows.append((name, load_s, ttft, decode, tokens))
         print(f"  {name}: load={load_s:.1f}s ttft={ttft:.2f}s "
-              f"gen={total:.2f}s ({tokens} tok, {tokens/total:.1f} tok/s)", flush=True)
+              f"decode={decode:.2f}s ({tokens} tok, {tokens/decode:.1f} tok/s)", flush=True)
     # Print device characteristics before the final table
     sysinfo = _sys_info()
     ctx = ready_ev.get("ctx", "?") if ready_ev else "?"
     print(f"\n== gpu ==  host={sysinfo.get('host', '?')}  cpu={sysinfo.get('cpu', '?')}  "
           f"ram={sysinfo.get('ram', '?')}  os={sysinfo.get('os', '?')}  ctx={ctx}  "
-          f"runs={runs}  maxTokens={BENCH_MAX_TOKENS}  prompt={len(prompt)} chars")
+          f"runs={runs}  maxTokens={BENCH_MAX_TOKENS}  "
+          f"prompt={len(prompt)} chars = {prefix_chars} prefix + {suffix_chars} suffix, "
+          f"{prompt_tokens if prompt_tokens is not None else '?'} tokens")
     w = max((len(name) for name, *_rest in rows), default=len("model"))
     print(f"{'model':<{w}}  load_s  ttft_s  gen_s  tokens  tok_s")
     for name, l, ttft, total, tokens in rows:
@@ -546,16 +551,21 @@ def mask_reserved(text):
     return text
 
 
-def fixture_fim_prompt():
+def fixture_prompt_parts():
     """Plugin-shaped FIM prompt over the bundled fixture: the cursor sits on the
-    whitespace-only line 96 inside a var block, so the prefill is a realistic
-    ~1.5–2k tokens (prefix/suffix clamps mirror the plugin defaults)."""
+    whitespace-only line 96 inside a var block, and the prefix/suffix clamps
+    mirror the plugin defaults. Returns (prompt, prefix_chars, suffix_chars)."""
     with open(os.path.join(ROOT, "scripts", "fixtures", "api_test.go"), encoding="utf-8") as f:
         lines = f.read().split("\n")
     li, col = 95, 2
     prefix = mask_reserved("\n".join(lines[:li]) + "\n" + lines[li][:col])[-PLUGIN_PREFIX_MAX:]
     suffix = mask_reserved(lines[li][col:] + "\n" + "\n".join(lines[li + 1:]))[:PLUGIN_SUFFIX_MAX]
-    return "<|fim_prefix|>" + prefix + "<|fim_suffix|>" + suffix + "<|fim_middle|>"
+    return ("<|fim_prefix|>" + prefix + "<|fim_suffix|>" + suffix + "<|fim_middle|>",
+            len(prefix), len(suffix))
+
+
+def fixture_fim_prompt():
+    return fixture_prompt_parts()[0]
 
 
 def real_file(model, file, line, column, max_tokens):
@@ -586,7 +596,9 @@ def real_file(model, file, line, column, max_tokens):
     print("\n" + "=" * 72)
     print(f"file: {file} @ {line}:{column} (cursor line: {lines[li][:col]!r})")
     print(f"next line in file: {next_line!r}")
-    print(f"completion: {len(text)} chars, {len(completion_lines)} lines, finishReason={done.get('finishReason') if done else 'TIMEOUT'}")
+    print(f"completion: {len(text)} chars, {len(completion_lines)} lines, "
+          f"finishReason={done.get('finishReason') if done else 'TIMEOUT'}, "
+          f"prompt={done.get('promptTokens') if done else '?'} tokens")
     stripped = text.strip()
     next_trim = next_line.strip()
     if not stripped:

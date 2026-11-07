@@ -242,21 +242,24 @@ final class Worker: @unchecked Sendable {
             Wire.emit(["type": "done", "id": request.id, "finishReason": "cancel"])
             return
         }
+        var promptTokens = 0
         do {
             // Prepare inside the container's isolation, hand the sendable
             // stream out and consume it here — the loop drives itself in
             // its own task.
-            let stream: AsyncStream<Generation> = try await container.perform { context in
+            let (stream, tokens) = try await container.perform { context -> (AsyncStream<Generation>, Int) in
                 // Raw tokenization, no chat template: the plugin sends fully
                 // rendered FIM prompts; wrapping them in a chat breaks base
                 // models and deflects instruct ones.
                 let tokens = context.tokenizer.encode(text: request.prompt, addSpecialTokens: false)
                 let input = LMInput(text: .init(tokens: MLXArray(tokens)))
-                return try MLXLMCommon.generate(
+                let stream = try MLXLMCommon.generate(
                     input: input,
                     parameters: GenerateParameters(maxTokens: request.maxTokens),
                     context: context)
+                return (stream, tokens.count)
             }
+            promptTokens = tokens
             var buffer = ""
             var stopHit = false
             events: for await event in stream {
@@ -300,7 +303,8 @@ final class Worker: @unchecked Sendable {
                 return
             }
         }
-        Wire.emit(["type": "done", "id": request.id, "finishReason": finishReason])
+        Wire.emit(["type": "done", "id": request.id, "finishReason": finishReason,
+                   "promptTokens": promptTokens])
     }
 }
 
