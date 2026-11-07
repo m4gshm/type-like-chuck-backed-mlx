@@ -25,17 +25,24 @@ Events on stdout (one JSON object per line):
 - `{"type":"ready","model":...,"device":"gpu","ctx":N}` after the model loads;
 - `{"type":"token","text":"..."}` per generated piece (no id — only one
   generation is active);
-- `{"type":"done","id":N,"finishReason":"stop"|"length"|"cancel","promptTokens":N}`
-  (prompt token count from the runner's tokenizer; omitted on the cancel paths
-  that answer without generating);
+- `{"type":"done","id":N,"finishReason":"stop"|"length"|"cancel","promptTokens":N,"cachedTokens":N}`
+  (prompt token count from the runner's tokenizer — omitted on the cancel paths
+  that answer without generating — and how many of them came from the KV cache,
+  0 when the request ran without `cache` or missed);
 - `{"type":"error","id":N|null,"message":"..."}`.
 
-Requests on stdin: `{"type":"generate","id":N,"prompt":"...","maxTokens":N,"stop":[...]}`,
+Requests on stdin: `{"type":"generate","id":N,"prompt":"...","maxTokens":N,"stop":[...],"cache":true|false}`,
 `{"type":"cancel","id":N}` (cancels the active generation, or a queued one by id —
 the cancelled queued request is answered immediately with
 `{"type":"done","id":N,"finishReason":"cancel"}`), and `{"type":"shutdown"}` (drains
 the queue answering every pending request with `finishReason:"cancel"`, cancels
-the active generation and exits). Logs go to stderr only. The runner queues
+the active generation and exits). `cache` opts the request into KV-cache reuse:
+when its prompt shares a long token prefix with the previous cached generation
+(≥32 tokens — typing at the cursor grows the FIM prefix), the shared rows are
+trimmed to the common prefix and only the rest is prefilled; the `done` event
+reports how many prompt tokens the cache served. The cache holds one entry
+(the last clean generation) and is rebuilt after a cancelled or stop-string
+generation, a failed one, or a prompt that no longer matches. Logs go to stderr only. The runner queues
 generate requests and serves them one at a time in arrival order: `token`
 events carry no id (only one generation is active) and always belong to the
 request being processed; `done`/`error` events carry the request id. A failed
@@ -80,14 +87,25 @@ what the plugin actually sends); `--prompt tiny` switches to the one-line FIM.
 ```text
 == gpu ==  host=MacBook Pro  cpu=Apple M4 Pro  ram=48 GB  os=macOS 26.7.1  ctx=0  runs=2  maxTokens=64  prompt=4815 chars = 2773 prefix + 2000 suffix, 1724 tokens
 model      load_s  ttft_s  gen_s  tokens  tok_s
-0.5B-4bit     0.4    0.29   0.21     63   297.1
-1.5B-4bit     0.4    0.98   0.40     62   154.4
-3B-4bit       0.5    2.05   0.66     62    94.5
-0.5B-8bit     0.4    0.30   0.26     60   226.7
-1.5B-8bit     0.5    0.99   0.59     61   102.6
-3B-8bit       0.9    2.07   1.06     59    55.5
-7B-4bit       1.2    5.10   1.47     62    42.0
-7B-8bit       2.4    5.46   2.62     62    23.7
+0.5B-4bit     0.4    0.33   0.20     64   328.2
+1.5B-4bit     0.4    1.06   0.41     61   149.6
+3B-4bit       0.6    2.11   0.67     62    91.9
+0.5B-8bit     0.4    0.47   0.27     60   223.0
+1.5B-8bit     0.5    1.03   0.60     57    95.7
+3B-8bit       1.0    2.30   1.10     59    53.4
+7B-4bit       1.2    4.79   1.27     62    48.7
+7B-8bit       2.3    5.35   2.38     62    26.1
+
+warm start (KV-cache reuse, prompt + typed characters):
+model      ttft_w_s  cached_tok
+0.5B-4bit      0.16  891/1726
+1.5B-4bit      0.53  891/1726
+3B-4bit        1.08  891/1726
+0.5B-8bit      0.17  891/1726
+1.5B-8bit      0.54  891/1726
+3B-8bit        1.10  891/1726
+7B-4bit        2.50  891/1726
+7B-8bit        2.60  891/1726
 
 (one-line prompt, 78 chars / 16 tokens:)
 == gpu ==  host=MacBook Pro  cpu=Apple M4 Pro  ram=48 GB  os=macOS 26.7.1  ctx=0  runs=2  maxTokens=64  prompt=78 chars = 78 prefix + 0 suffix, 16 tokens
@@ -105,3 +123,8 @@ model      load_s  ttft_s  gen_s  tokens  tok_s
 `load_s` — time to the `ready` event, `ttft_s` — time to first token
 (prompt token count comes from the runner's `done` event), `tok_s` —
 decode throughput. Filter models with `SIZES=3B-4bit task e2e:bench`.
+With `--cache` every model also runs two warm continuations — the prompt
+grows by typed characters the way typing does — and reports `ttft_w_s`
+(first token of the warm run) and `cached_tok` (prompt tokens served from
+the KV cache): the shared FIM prefix (~half the prompt here) is no longer
+prefilled, so the warm first token lands about twice as fast.

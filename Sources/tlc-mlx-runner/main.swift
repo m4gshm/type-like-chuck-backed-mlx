@@ -12,6 +12,7 @@ struct InMessage: Decodable {
     let prompt: String?
     let maxTokens: Int?
     let stop: [String]?
+    let cache: Bool?
 }
 
 // Static methods on a Sendable enum are themselves Sendable, so these can be
@@ -114,6 +115,69 @@ struct Request: Sendable {
     let prompt: String
     let maxTokens: Int
     let stops: [String]
+    let cache: Bool
+}
+
+/// KV-cache reuse across generations: keeps the last prompt's cache and token
+/// ids; a request whose prompt shares a long token prefix (every keystroke
+/// extends the FIM prefix) continues from the cached rows instead of
+/// re-prefilling them — the same trim-to-common-prefix move ChatSession makes.
+/// Accessed only inside container.perform closures and by the generation task
+/// strictly after its stream drained and before the next request starts; the
+/// serial request queue makes that race-free.
+final class PromptLedger: @unchecked Sendable {
+    static let minTokens = 32
+
+    private var cache: [any KVCache]?
+    private var ids: [Int] = []
+    private var usable = false
+
+    /// Decides reuse for `tokens` and trims the cache to the shared prefix.
+    /// Returns how many prompt tokens the kept cache already represents.
+    func prepare(_ tokens: [Int], model: any LanguageModel, enabled: Bool) throws -> Int {
+        var reuse = 0
+        if enabled, usable, let current = cache, !current.isEmpty,
+            current.allSatisfy({ $0.isTrimmable }) {
+            reuse = min(Self.commonPrefix(ids, tokens), tokens.count - 1)
+        }
+        if reuse < Self.minTokens {
+            reuse = 0
+            cache = try model.newCache(parameters: nil)
+        } else {
+            for entry in cache! {
+                let before = entry.offset
+                if entry.trim(before - reuse) != before - reuse {
+                    reuse = 0
+                    cache = try model.newCache(parameters: nil)
+                    break
+                }
+            }
+        }
+        return reuse
+    }
+
+    /// Adopts the cache a finished generation leaves behind. A generation that
+    /// did not drain its stream (stop string, cancel, error) may still be
+    /// appending rows in the background — `invalidate` keeps the ledger from
+    /// trimming such a cache; the next request then rebuilds from scratch.
+    func commit(ids: [Int]) {
+        self.ids = ids
+        usable = cache != nil
+    }
+
+    func invalidate() {
+        usable = false
+    }
+
+    func cacheForRequest() -> [any KVCache]? {
+        cache
+    }
+
+    private static func commonPrefix(_ a: [Int], _ b: [Int]) -> Int {
+        var i = 0
+        while i < a.count && i < b.count && a[i] == b[i] { i += 1 }
+        return i
+    }
 }
 
 // Serial request queue served one generation at a time in arrival order —
@@ -133,6 +197,7 @@ final class Worker: @unchecked Sendable {
     }
 
     private let state = OSAllocatedUnfairLock<State>(initialState: State())
+    private let ledger = PromptLedger()
     /// Signals that a queued request is available.
     private let pending = DispatchSemaphore(value: 0)
     /// Signals that the worker loop has exited.
@@ -243,23 +308,31 @@ final class Worker: @unchecked Sendable {
             return
         }
         var promptTokens = 0
+        var cachedTokens = 0
         do {
             // Prepare inside the container's isolation, hand the sendable
             // stream out and consume it here — the loop drives itself in
             // its own task.
-            let (stream, tokens) = try await container.perform { context -> (AsyncStream<Generation>, Int) in
+            let (stream, tokens, reused) = try await container.perform { context -> (AsyncStream<Generation>, [Int], Int) in
                 // Raw tokenization, no chat template: the plugin sends fully
                 // rendered FIM prompts; wrapping them in a chat breaks base
                 // models and deflects instruct ones.
                 let tokens = context.tokenizer.encode(text: request.prompt, addSpecialTokens: false)
-                let input = LMInput(text: .init(tokens: MLXArray(tokens)))
+                let reused = try ledger.prepare(tokens, model: context.model, enabled: request.cache)
+                let input = reused > 0
+                    ? LMInput(text: .init(tokens: MLXArray(Array(tokens[reused...]))))
+                    : LMInput(text: .init(tokens: MLXArray(tokens)))
+                // Text LLMs here (Qwen2.5) carry no per-call positional state,
+                // so a trimmed cache needs no carried state to reanchor rows.
                 let stream = try MLXLMCommon.generate(
                     input: input,
+                    cache: ledger.cacheForRequest(),
                     parameters: GenerateParameters(maxTokens: request.maxTokens),
                     context: context)
-                return (stream, tokens.count)
+                return (stream, tokens, reused)
             }
-            promptTokens = tokens
+            promptTokens = tokens.count
+            cachedTokens = reused
             var buffer = ""
             var stopHit = false
             events: for await event in stream {
@@ -290,9 +363,16 @@ final class Worker: @unchecked Sendable {
             if !safe.isEmpty { Wire.emit(["type": "token", "text": safe]) }
             // A cancelled task ends the stream without an .info event.
             if Task.isCancelled && !stopHit { finishReason = "cancel" }
+            if stopHit || finishReason == "cancel" {
+                ledger.invalidate()
+            } else {
+                ledger.commit(ids: tokens)
+            }
         } catch is CancellationError {
+            ledger.invalidate()
             finishReason = "cancel"
         } catch {
+            ledger.invalidate()
             let wasCancelled = state.withLock { $0.cancelledId == request.id }
             if wasCancelled {
                 finishReason = "cancel"
@@ -304,7 +384,7 @@ final class Worker: @unchecked Sendable {
             }
         }
         Wire.emit(["type": "done", "id": request.id, "finishReason": finishReason,
-                   "promptTokens": promptTokens])
+                   "promptTokens": promptTokens, "cachedTokens": cachedTokens])
     }
 }
 
@@ -341,7 +421,8 @@ while true {
             id: id,
             prompt: prompt,
             maxTokens: message.maxTokens ?? 128,
-            stops: message.stop ?? []))
+            stops: message.stop ?? [],
+            cache: message.cache ?? false))
     case "cancel":
         worker.cancel(message.id)
     case "shutdown":

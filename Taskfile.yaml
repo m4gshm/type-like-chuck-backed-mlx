@@ -80,6 +80,12 @@ tasks:
     cmds:
       - python3 scripts/e2e.py bench${SIZES:+ --sizes "$SIZES"}
 
+  e2e:bench:cache:
+    desc: E2E benchmark with KV-cache reuse — adds warm continuations (ttft_w/cached_tok) per model (SIZES=a,b filters)
+    deps: [build]
+    cmds:
+      - python3 scripts/e2e.py bench --cache${SIZES:+ --sizes "$SIZES"}
+
   smoke:model:
     desc: NDJSON smoke against a real model (set MODEL_DIR to an mlx-community 4-bit model directory)
     deps: [build]
