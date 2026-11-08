@@ -290,11 +290,9 @@ final class Worker: @unchecked Sendable {
             state.withLock { $0.generation = generation }
             finished.wait()
         }
-        // The last cancelled MLX generation unwinds on its own threads (Metal
-        // command buffers, the generate loop's executor); exiting while that
-        // teardown is still running segfaults. Wait it out here — this is a
-        // plain Thread, so blocking sleep is fine.
-        Thread.sleep(forTimeInterval: 0.5)
+        // Every request awaited its producer task in generate() — including
+        // the producer's final GPU synchronize — so no MLX work outlives the
+        // loop and process teardown cannot race it.
         loopDone.signal()
     }
 
@@ -311,9 +309,9 @@ final class Worker: @unchecked Sendable {
         var cachedTokens = 0
         do {
             // Prepare inside the container's isolation, hand the sendable
-            // stream out and consume it here — the loop drives itself in
-            // its own task.
-            let (stream, tokens, reused) = try await container.perform { context -> (AsyncStream<Generation>, [Int], Int) in
+            // stream and producer task out and consume the stream here — the
+            // loop drives itself in its own task.
+            let (stream, producer, tokens, reused, tokenizer) = try await container.perform { context in
                 // Raw tokenization, no chat template: the plugin sends fully
                 // rendered FIM prompts; wrapping them in a chat breaks base
                 // models and deflects instruct ones.
@@ -324,30 +322,34 @@ final class Worker: @unchecked Sendable {
                     : LMInput(text: .init(tokens: MLXArray(tokens)))
                 // Text LLMs here (Qwen2.5) carry no per-call positional state,
                 // so a trimmed cache needs no carried state to reanchor rows.
-                let stream = try MLXLMCommon.generate(
+                let (stream, producer) = try MLXLMCommon.generateTokensTask(
                     input: input,
                     cache: ledger.cacheForRequest(),
                     parameters: GenerateParameters(maxTokens: request.maxTokens),
                     context: context)
-                return (stream, tokens, reused)
+                return (stream, producer, tokens, reused, context.tokenizer)
             }
             promptTokens = tokens.count
             cachedTokens = reused
+            var detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
             var buffer = ""
             var stopHit = false
             events: for await event in stream {
                 switch event {
-                case .chunk(let piece):
-                    buffer += piece
-                    let (safe, hit) = Wire.splitSafe(buffer, stops: request.stops)
-                    if !safe.isEmpty {
-                        Wire.emit(["type": "token", "text": safe])
-                        buffer = String(buffer.dropFirst(safe.count))
-                    }
-                    if hit {
-                        stopHit = true
-                        finishReason = "stop"
-                        break events
+                case .token(let token):
+                    detokenizer.append(token: token)
+                    if let piece = detokenizer.next() {
+                        buffer += piece
+                        let (safe, hit) = Wire.splitSafe(buffer, stops: request.stops)
+                        if !safe.isEmpty {
+                            Wire.emit(["type": "token", "text": safe])
+                            buffer = String(buffer.dropFirst(safe.count))
+                        }
+                        if hit {
+                            stopHit = true
+                            finishReason = "stop"
+                            break events
+                        }
                     }
                 case .info(let info):
                     switch info.stopReason {
@@ -355,10 +357,12 @@ final class Worker: @unchecked Sendable {
                     case .cancelled: finishReason = "cancel"
                     default: break
                     }
-                case .toolCall, .rejectedToolCall:
-                    break
                 }
             }
+            // Awaiting the producer settles its final GPU synchronize: after
+            // this nothing outlives the request and exit cannot race Metal
+            // teardown.
+            await producer.value
             let (safe, _) = Wire.splitSafe(buffer, stops: request.stops)
             if !safe.isEmpty { Wire.emit(["type": "token", "text": safe]) }
             // A cancelled task ends the stream without an .info event.
