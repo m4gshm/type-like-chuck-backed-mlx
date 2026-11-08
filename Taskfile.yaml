@@ -38,6 +38,15 @@ tasks:
       - swift build -c release
       - mkdir -p '{{.BUILD_DIR}}'
       - cp '.build/release/tlc-mlx-runner' '{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64'
+      # Contributed to the release archive only: strip debug symbols (the static
+      # stdlib + MLX keep the Mach-O fat otherwise). Kept unstripped in
+      # .build/release for local backtrace debugging.
+      - |
+        if command -v strip >/dev/null 2>&1; then
+          strip '{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64'
+        else
+          echo "strip not found — shipping the unstripped binary"
+        fi
       # SwiftPM resource bundles (MLX default metallib etc.) must sit next to
       # the binary: without them the runner fails to load Metal at model load.
       # -f: bundle files land read-only from SwiftPM, so a re-copy over an
