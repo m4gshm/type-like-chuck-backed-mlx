@@ -19,6 +19,7 @@ tasks:
 
   build:
     desc: Release build → build/tlc-mlx-runner-macos-arm64
+    run: once
     cmds:
       - |
         TAG=$(git describe --tags --exact-match --dirty 2>/dev/null || true)
@@ -38,7 +39,9 @@ tasks:
       - cp '.build/release/tlc-mlx-runner' '{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64'
       # SwiftPM resource bundles (MLX default metallib etc.) must sit next to
       # the binary: without them the runner fails to load Metal at model load.
-      - cp -R '.build/release/'*.bundle '{{.BUILD_DIR}}/'
+      # -f: bundle files land read-only from SwiftPM, so a re-copy over an
+      # existing build/ needs unlink-and-recreate.
+      - cp -Rf '.build/release/'*.bundle '{{.BUILD_DIR}}/'
     sources:
       - Sources/**/*
       - Package.swift
