@@ -1,0 +1,6 @@
+.build/
+build/
+.cache/
+.DS_Store
+.task/
+__pycache__

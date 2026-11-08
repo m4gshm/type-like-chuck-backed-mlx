@@ -1,0 +1,79 @@
+name: Runner
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['**']
+    tags: ['v*']
+
+concurrency:
+  group: runner-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (macos-arm64)
+    runs-on: macos-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+      - name: install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: build and smoke
+        run: task ci
+      - name: upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: tlc-mlx-runner-macos-arm64
+          path: build/*
+          retention-days: 30
+
+  e2e:
+    name: e2e (model suite)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+      - name: install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: cache test model
+        uses: actions/cache@v4
+        with:
+          path: .cache/models
+          key: e2e-model-${{ hashFiles('scripts/e2e.py') }}
+      - name: run e2e suite
+        run: task e2e
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: download binaries
+        uses: actions/download-artifact@v5
+        with:
+          merge-multiple: true
+          path: dist
+      # One archive per release asset: the binary plus the SwiftPM resource
+      # bundles (metallib) it needs next to it at runtime; directories cannot
+      # be release assets.
+      - name: pack release asset
+        run: |
+          cd dist
+          tar -czf tlc-mlx-runner-macos-arm64.tar.gz tlc-mlx-runner-macos-arm64 *.bundle
+          rm tlc-mlx-runner-macos-arm64 *.bundle
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
