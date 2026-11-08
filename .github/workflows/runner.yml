@@ -71,7 +71,7 @@ jobs:
         run: |
           cd dist
           tar -czf tlc-mlx-runner-macos-arm64.tar.gz tlc-mlx-runner-macos-arm64 *.bundle
-          rm tlc-mlx-runner-macos-arm64 *.bundle
+          rm -rf tlc-mlx-runner-macos-arm64 *.bundle
       - name: create release
         uses: softprops/action-gh-release@v2
         with:
