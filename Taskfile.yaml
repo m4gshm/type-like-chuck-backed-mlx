@@ -47,22 +47,34 @@ tasks:
         else
           echo "strip not found — shipping the unstripped binary"
         fi
-      # SwiftPM resource bundles (MLX default metallib etc.) must sit next to
-      # the binary: without them the runner fails to load Metal at model load.
-      # -f: bundle files land read-only from SwiftPM, so a re-copy over an
-      # existing build/ needs unlink-and-recreate.
-      - cp -Rf '.build/release/'*.bundle '{{.BUILD_DIR}}/'
+      # The metallib is compiled from the mlx-generated kernels and shipped
+      # colocated with the binary: MLX loads <binary_dir>/mlx.metallib first
+      # (mlx backend/metal/device.cpp load_default_library). The SwiftPM
+      # resource-bundle path (mlx-swift_Cmlx.bundle) is not reliable — the
+      # swiftbuild engine emits no metallib and flattens bundles — so the
+      # bundle contract is gone entirely.
+      - |
+        mkdir -p .build/air
+        cd .build/checkouts/mlx-swift/Source/Cmlx
+        find mlx-generated/metal -name '*.metal' | while read -r src; do
+          xcrun -sdk macosx metal -c "$src" -I mlx -I mlx-generated \
+            -o "../../../air/$(basename "${src%.metal}").air"
+        done
+        xcrun -sdk macosx metallib ../../../air/*.air -o "../../../{{.BUILD_DIR}}/mlx.metallib"
     sources:
       - Sources/**/*
       - Package.swift
     generates:
       - '{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64'
+      - '{{.BUILD_DIR}}/mlx.metallib'
 
   smoke:
     desc: No-args smoke — the runner must emit one {"type":"error"} event (CI checks exit code 2 separately)
     deps: [build]
     cmds:
       - |
+        test -f '{{.BUILD_DIR}}/mlx.metallib' \
+          || { echo "smoke: mlx.metallib missing next to the binary — Metal will not load"; exit 1; }
         out=$(./{{.BUILD_DIR}}/tlc-mlx-runner-macos-arm64 2>/dev/null || true)
         echo "$out" | grep -q '"type":"error"' \
           || { echo "no error event: $out"; exit 1; }
@@ -149,7 +161,7 @@ tasks:
       - task: build
       - |
         mkdir -p dist
-        (cd '{{.BUILD_DIR}}' && tar -czf ../dist/tlc-mlx-runner-macos-arm64.tar.gz tlc-mlx-runner-macos-arm64 *.bundle)
+        (cd '{{.BUILD_DIR}}' && tar -czf ../dist/tlc-mlx-runner-macos-arm64.tar.gz tlc-mlx-runner-macos-arm64 mlx.metallib)
         gh release view '{{.RELEASE_TAG}}' -R '{{.RELEASE_REPO}}' >/dev/null 2>&1 \
           || gh release create '{{.RELEASE_TAG}}' --draft --verify-tag --generate-notes -R '{{.RELEASE_REPO}}'
         gh release upload '{{.RELEASE_TAG}}' dist/tlc-mlx-runner-macos-arm64.tar.gz --clobber -R '{{.RELEASE_REPO}}'

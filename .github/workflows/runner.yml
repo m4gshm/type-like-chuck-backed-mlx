@@ -64,14 +64,13 @@ jobs:
         with:
           merge-multiple: true
           path: dist
-      # One archive per release asset: the binary plus the SwiftPM resource
-      # bundles (metallib) it needs next to it at runtime; directories cannot
-      # be release assets.
+      # One archive per release asset: the binary plus the colocated mlx.metallib
+      # it loads from beside itself; directories cannot be release assets.
       - name: pack release asset
         run: |
           cd dist
-          tar -czf tlc-mlx-runner-macos-arm64.tar.gz tlc-mlx-runner-macos-arm64 *.bundle
-          rm -rf tlc-mlx-runner-macos-arm64 *.bundle
+          tar -czf tlc-mlx-runner-macos-arm64.tar.gz tlc-mlx-runner-macos-arm64 mlx.metallib
+          rm -rf tlc-mlx-runner-macos-arm64 mlx.metallib
       - name: create release
         uses: softprops/action-gh-release@v2
         with:
