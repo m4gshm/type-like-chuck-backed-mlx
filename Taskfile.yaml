@@ -54,13 +54,14 @@ tasks:
       # swiftbuild engine emits no metallib and flattens bundles — so the
       # bundle contract is gone entirely.
       - |
+        ROOT="$PWD"
         mkdir -p .build/air
         cd .build/checkouts/mlx-swift/Source/Cmlx
         find mlx-generated/metal -name '*.metal' | while read -r src; do
           xcrun -sdk macosx metal -c "$src" -I mlx -I mlx-generated \
-            -o "../../../air/$(basename "${src%.metal}").air"
+            -o "$ROOT/.build/air/$(basename "${src%.metal}").air"
         done
-        xcrun -sdk macosx metallib ../../../air/*.air -o "../../../{{.BUILD_DIR}}/mlx.metallib"
+        xcrun -sdk macosx metallib "$ROOT"/.build/air/*.air -o "$ROOT/{{.BUILD_DIR}}/mlx.metallib"
     sources:
       - Sources/**/*
       - Package.swift
