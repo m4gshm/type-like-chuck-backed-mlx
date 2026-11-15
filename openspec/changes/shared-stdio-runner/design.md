@@ -26,6 +26,9 @@ Add `id` to every `token` event. Old clients ignore the extra field; the new ext
 ### PID in the handshake
 The version/ready handshake event gains `pid`, used by the extension for liveness pre-checks and status display.
 
+### Per-instance token
+The extension generates a random secret per spawn and passes it as `--token <secret>`; in listen mode the runner requires `auth` as the first message of each client connection and closes the connection on a wrong or missing token. This protects the TCP transport, which any local process can reach; stdio mode keeps no authentication (its pipes are private). Token lives on the command line and in the extension's discovery file, nowhere else.
+
 ## Risks / Trade-offs
 
 - [Backend and extension land out of order] → both directions are compatible: old runner + new extension = private spawn fallback; new runner + old extension = unchanged behavior.

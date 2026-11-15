@@ -15,6 +15,7 @@
 
 - [ ] 3.1 Add the request `id` to every `token` event; keep stdin/stdout behavior otherwise identical; verify the protocol tests
 - [ ] 3.2 Add `pid` (and the chosen `port` with `--listen-tcp 0`) to the startup handshake event and verify it in the protocol e2e
+- [ ] 3.3 Accept `--token <secret>` and require `auth` as the first message of every listen-mode client connection (wrong/missing token → `error` + close); stdin mode unchanged; verify in the smoke script
 
 ## 4. Contract and release
 
