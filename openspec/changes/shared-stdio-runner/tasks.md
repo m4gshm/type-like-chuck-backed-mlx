@@ -4,6 +4,7 @@
 
 - [ ] 1.1 Parse `--listen <endpoint>` and `--listen-tcp <port|0>` (arg tests: missing value, invalid path, stale socket file handling) and verify the test suite passes
 - [ ] 1.2 Implement the unix domain socket server (bind-then-probe ownership check before any unlink) and the localhost TCP server (port 0 = random free port), parameterizing the NDJSON loop over the line source (stdin or connection); verify with a manual two-connection smoke script
+- [ ] 1.4 Keep serving stdin in listen mode: the spawning window talks over stdin, so register it as a client (no auth) alongside listener connections — openvino bug: a stdin nobody read silently froze the spawning window's completions; verify by generating via stdin while a listener client is connected
 - [ ] 1.3 Report failure on a taken endpoint (`error` event, non-zero exit) and verify with a unit or manual test
 
 ## 2. Client refcount and self-exit
