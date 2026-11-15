@@ -2,9 +2,9 @@
 
 ## 1. Listen mode
 
-- [ ] 1.1 Parse `--listen <endpoint>` (arg tests: missing value, invalid path, stale socket file handling) and verify the test suite passes
-- [ ] 1.2 Implement the unix domain socket server (unlink stale path before bind), parameterizing the NDJSON loop over the line source (stdin or connection); verify with a manual two-connection smoke script
-- [ ] 1.3 Report failure on a taken socket path (`error` event, non-zero exit) and verify with a unit or manual test
+- [ ] 1.1 Parse `--listen <endpoint>` and `--listen-tcp <port|0>` (arg tests: missing value, invalid path, stale socket file handling) and verify the test suite passes
+- [ ] 1.2 Implement the unix domain socket server (bind-then-probe ownership check before any unlink) and the localhost TCP server (port 0 = random free port), parameterizing the NDJSON loop over the line source (stdin or connection); verify with a manual two-connection smoke script
+- [ ] 1.3 Report failure on a taken endpoint (`error` event, non-zero exit) and verify with a unit or manual test
 
 ## 2. Client refcount and self-exit
 
@@ -14,7 +14,7 @@
 ## 3. Token ids and PID
 
 - [ ] 3.1 Add the request `id` to every `token` event; keep stdin/stdout behavior otherwise identical; verify the protocol tests
-- [ ] 3.2 Add `pid` to the startup handshake event and verify it in the protocol e2e
+- [ ] 3.2 Add `pid` (and the chosen `port` with `--listen-tcp 0`) to the startup handshake event and verify it in the protocol e2e
 
 ## 4. Contract and release
 

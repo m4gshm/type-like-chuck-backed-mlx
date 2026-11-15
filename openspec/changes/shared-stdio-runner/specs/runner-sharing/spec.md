@@ -3,15 +3,15 @@
 ## ADDED Requirements
 
 ### Requirement: Listen mode
-The runner SHALL accept `--listen <endpoint>` to serve its NDJSON protocol over a unix domain socket instead of stdin/stdout, without opening any TCP port and without requiring an API key. Requests, events, ordering, cancellation, cache reuse and shutdown semantics SHALL be identical on both transports. The listen endpoint MAY combine with `--model` and the usual start options; readiness is reported on the connection as today.
+The runner SHALL accept `--listen <endpoint>` to serve its NDJSON protocol over a unix domain socket, and `--listen-tcp <port>` (port `0` = a random free localhost port, the chosen port reported on the handshake) to serve it over `127.0.0.1:<port>` — without requiring an API key. Requests, events, ordering, cancellation, cache reuse and shutdown semantics SHALL be identical on all transports. The listen endpoint MAY combine with `--model` and the usual start options; readiness is reported on the connection as today. The runner SHALL NOT read or write any instance-discovery files; that is the client's responsibility.
 
 #### Scenario: Client connects and generates
 - **WHEN** the runner starts with `--listen <socket>` and a client connects and sends a `generate` request
 - **THEN** the client receives the same `token`/`done` event stream as a stdin/stdout client would
 
-#### Scenario: No TCP port
-- **WHEN** the runner runs in listen mode
-- **THEN** it has no listening TCP socket; only the domain socket endpoint exists
+#### Scenario: TCP with a random port
+- **WHEN** the runner starts with `--listen-tcp 0` and a client connects to the reported port on `127.0.0.1`
+- **THEN** the client receives the same `token`/`done` event stream, and the handshake carries the chosen port
 
 ### Requirement: Client refcount and self-exit
 In listen mode the runner SHALL track its connected clients and exit by itself when the connection count returns to zero after having been at least one. A client write error or protocol timeout SHALL count as a disconnect. The runner SHALL NOT exit before the first client connects.
@@ -43,9 +43,13 @@ Every `token` event SHALL carry the `id` of the request it belongs to, so that m
 - **WHEN** a legacy client sends a `generate` request without listening to ids
 - **THEN** the token stream is unchanged apart from the added `id` field, which legacy clients ignore
 
-### Requirement: PID exposure on ready
-The runner SHALL include its process id (`pid`) in its startup handshake event (the `version`/ready event), so clients can validate backend liveness before connecting and identify the process in status output.
+### Requirement: PID and port exposure on ready
+The runner SHALL include its process id (`pid`) — and, when started with `--listen-tcp 0`, the chosen localhost port (`port`) — in its startup handshake event (the `version`/ready event), so clients can validate backend liveness before connecting, record how to connect, and identify the process in status output.
 
 #### Scenario: Handshake carries the pid
 - **WHEN** the runner reports readiness to a connected or piped client
 - **THEN** the handshake event includes the runner's own OS process id
+
+#### Scenario: Handshake carries the chosen TCP port
+- **WHEN** the runner starts with `--listen-tcp 0` and reports readiness
+- **THEN** the handshake event includes the actual bound port
