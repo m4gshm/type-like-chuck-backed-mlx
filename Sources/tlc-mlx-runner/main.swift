@@ -70,12 +70,15 @@ enum Wire {
 }
 
 var arguments = Array(CommandLine.arguments.dropFirst())
-var modelDir = ""
-var ctx = 0
+// Written once by arg parsing on the main thread, read from the client
+// reader threads afterwards: nonisolated(unsafe) opts out of the implicit
+// main-actor isolation of top-level vars in Swift 6 mode.
+nonisolated(unsafe) var modelDir = ""
+nonisolated(unsafe) var ctx = 0
 var printVersion = false
 var listenPath = ""
 var listenTcpPort = -1
-var authToken = ""
+nonisolated(unsafe) var authToken = ""
 var index = 0
 while index < arguments.count {
     switch arguments[index] {
@@ -442,7 +445,9 @@ if !listenPath.isEmpty {
     }
 }
 
-var readyLine: [String: Any] = [
+// Top-level vars are main-actor isolated in Swift 6 mode; these are written
+// once during startup and read from the client reader threads afterwards.
+nonisolated(unsafe) var readyLine: [String: Any] = [
     "type": "ready",
     "model": modelDir,
     "device": "gpu",
@@ -451,13 +456,13 @@ var readyLine: [String: Any] = [
 ]
 if let listenPort { readyLine["port"] = Int(listenPort) }
 
-func broadcastReady(to sink: Sink) {
+@Sendable func broadcastReady(to sink: Sink) {
     Wire.emit(to: sink, readyLine)
 }
 
 let stdinClient = Client(fd: 0, needsAuth: false, label: "stdio client")
 clients.add(stdinClient)
-registerSinkOwner(stdinClient.sink, client: stdinClient)
+sinkOwners.register(stdinClient.sink, client: stdinClient)
 Wire.emit(to: stdinClient.sink, readyLine)
 worker.run(container: container)
 
@@ -469,7 +474,7 @@ clients.onLastClientLeft = { reason in
     }).start()
 }
 
-func handleLine(_ line: String, client: Client) {
+@Sendable func handleLine(_ line: String, client: Client) {
     guard let data = line.data(using: .utf8),
           let message = try? JSONDecoder().decode(InMessage.self, from: data) else {
         Wire.emitError(to: client.sink, id: nil, "unparseable request")
@@ -522,7 +527,7 @@ if let listenFd {
 spawnThread {
     let reader = LineReader(fd: 0)
     while let line = reader.nextLine() {
-        handleLine(line, stdinClient)
+        handleLine(line, client: stdinClient)
     }
     dropClient(stdinClient, reason: "stdin closed")
 }

@@ -112,18 +112,25 @@ let clients = Clients()
 /// Events with nobody left to reach (the self-exit drain) go here.
 let discardSink = Sink(fd: -1)
 
-private let sinkLock = NSLock()
-private var sinkOwners: [ObjectIdentifier: Client] = [:]
+private final class SinkOwnerRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var owners: [ObjectIdentifier: Client] = [:]
 
-func registerSinkOwner(_ sink: Sink, client: Client) {
-    sinkLock.withLock { sinkOwners[ObjectIdentifier(sink)] = client }
+    func register(_ sink: Sink, client: Client) {
+        lock.withLock { owners[ObjectIdentifier(sink)] = client }
+    }
+
+    func owner(_ sink: Sink) -> Client? {
+        lock.withLock { owners[ObjectIdentifier(sink)] }
+    }
 }
+
+let sinkOwners = SinkOwnerRegistry()
 
 /// A failed client write is a disconnect: drop via the registry so the
 /// refcount drives the self-exit.
 func noteBrokenSink(_ sink: Sink) {
-    let owner = sinkLock.withLock { sinkOwners[ObjectIdentifier(sink)] }
-    if let owner {
+    if let owner = sinkOwners.owner(sink) {
         dropClient(owner, reason: "broken sink")
     }
 }
@@ -266,7 +273,7 @@ func serveListener(fd: Int32, isTcp: Bool, handleLine: @escaping @Sendable (Stri
             guard clientFd >= 0 else { break }
             let client = Client(fd: clientFd, needsAuth: isTcp, label: "client \(clientFd)")
             clients.add(client)
-            registerSinkOwner(client.sink, client: client)
+            sinkOwners.register(client.sink, client: client)
             broadcastReady(to: client.sink)
             spawnThread {
                 let reader = LineReader(fd: clientFd)
