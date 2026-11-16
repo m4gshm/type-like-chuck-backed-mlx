@@ -95,6 +95,11 @@ tasks:
     cmds:
       - python3 scripts/e2e.py test${MODEL_DIR:+ --model "$MODEL_DIR"}
 
+  e2e:prebuilt:
+    desc: E2E suite against the prebuilt binary in build/ (CI; no build dep)
+    cmds:
+      - python3 scripts/e2e.py test${MODEL_DIR:+ --model "$MODEL_DIR"}
+
   e2e:download-model:
     desc: Download the default E2E test model (Qwen2.5-Coder-0.5B 4-bit) into .cache/models/
     cmds:
