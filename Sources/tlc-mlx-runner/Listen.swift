@@ -8,6 +8,7 @@ import Glibc
 /// Line-oriented output to a client: fd 1 for the spawner's stdio, an
 /// accepted socket fd otherwise. A failed write marks the sink broken — the
 /// owner drops the client, mirroring the ovgenai runner's sinkBroken path.
+/// fd -1 discards output (used where events have nobody left to reach).
 final class Sink: @unchecked Sendable {
     let fd: Int32
     private let lock = NSLock()
@@ -17,6 +18,7 @@ final class Sink: @unchecked Sendable {
     }
 
     func writeLine(_ payload: [String: Any]) -> Bool {
+        if fd < 0 { return false }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return false }
         var bytes = [UInt8](data)
         bytes.append(0x0A)
@@ -106,6 +108,9 @@ final class Clients: @unchecked Sendable, CustomStringConvertible {
 }
 
 let clients = Clients()
+
+/// Events with nobody left to reach (the self-exit drain) go here.
+let discardSink = Sink(fd: -1)
 
 private let sinkLock = NSLock()
 private var sinkOwners: [ObjectIdentifier: Client] = [:]

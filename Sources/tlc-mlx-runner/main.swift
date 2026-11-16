@@ -13,6 +13,7 @@ struct InMessage: Decodable {
     let maxTokens: Int?
     let stop: [String]?
     let cache: Bool?
+    let token: String?
 }
 
 // Static methods on a Sendable enum are themselves Sendable, so these can be
@@ -26,18 +27,24 @@ enum Wire {
         }
     }
 
-    static func emitError(id: Int?, _ message: String) {
+    static func emit(to sink: Sink, _ payload: [String: Any]) {
+        if !sink.writeLine(payload) {
+            noteBrokenSink(sink)
+        }
+    }
+
+    static func emitError(to sink: Sink, id: Int?, _ message: String) {
         var payload: [String: Any] = ["type": "error", "message": message]
         if let id {
             payload["id"] = id
         } else {
             payload["id"] = NSNull()
         }
-        emit(payload)
+        emit(to: sink, payload)
     }
 
     static func failNoModel(_ reason: String) -> Never {
-        emitError(id: nil, reason)
+        emitError(to: Sink(fd: 1), id: nil, reason)
         exit(2)
     }
 
@@ -66,6 +73,9 @@ var arguments = Array(CommandLine.arguments.dropFirst())
 var modelDir = ""
 var ctx = 0
 var printVersion = false
+var listenPath = ""
+var listenTcpPort = -1
+var authToken = ""
 var index = 0
 while index < arguments.count {
     switch arguments[index] {
@@ -79,6 +89,20 @@ while index < arguments.count {
         index += 1
         guard index < arguments.count, let value = Int(arguments[index]) else { Wire.failNoModel("--ctx requires a number") }
         ctx = value
+    case "--listen":
+        index += 1
+        guard index < arguments.count else { Wire.failNoModel("--listen requires a value") }
+        listenPath = arguments[index]
+    case "--listen-tcp":
+        index += 1
+        guard index < arguments.count, let value = Int(arguments[index]), value >= 0, value <= 65535 else {
+            Wire.failNoModel("--listen-tcp requires a port number (0 = random free port)")
+        }
+        listenTcpPort = value
+    case "--token":
+        index += 1
+        guard index < arguments.count else { Wire.failNoModel("--token requires a value") }
+        authToken = arguments[index]
     default:
         Wire.failNoModel("unknown argument \(arguments[index])")
     }
@@ -90,32 +114,13 @@ if printVersion {
 }
 guard !modelDir.isEmpty else { Wire.failNoModel("missing required --model") }
 
-// Emits only text that cannot be the beginning of a stop string; returns
-// whether a full stop string was found (the caller then drops the tail).
-func splitSafe(_ text: String, stops: [String]) -> (String, Bool) {
-    var cut = Int.max
-    var hit = false
-    for stop in stops where !stop.isEmpty {
-        if let range = text.range(of: stop) {
-            let offset = text.distance(from: text.startIndex, to: range.lowerBound)
-            if offset < cut { cut = offset }
-            hit = true
-        }
-    }
-    if hit { return (String(text.prefix(cut)), true) }
-    let hold = (stops.map(\.count).max() ?? 1) - 1
-    if hold > 0, text.count > hold {
-        return (String(text.dropLast(hold)), false)
-    }
-    return (text, false)
-}
-
 struct Request: Sendable {
     let id: Int
     let prompt: String
     let maxTokens: Int
     let stops: [String]
     let cache: Bool
+    let sink: Sink
 }
 
 /// KV-cache reuse across generations: keeps the last prompt's cache and token
@@ -215,7 +220,7 @@ final class Worker: @unchecked Sendable {
         pending.signal()
     }
 
-    func cancel(_ id: Int?) {
+    func cancel(_ id: Int?, sink: Sink) {
         let removedId: Int? = state.withLock { st in
             if let id {
                 if id == st.activeId {
@@ -234,13 +239,13 @@ final class Worker: @unchecked Sendable {
             return nil
         }
         if let removedId {
-            Wire.emit(["type": "done", "id": removedId, "finishReason": "cancel"])
+            Wire.emit(to: sink, ["type": "done", "id": removedId, "finishReason": "cancel"])
         }
     }
 
     /// Drains the queue (every pending request answered with done/`cancel`),
     /// cancels the active generation and waits for the worker to finish.
-    func shutdown() {
+    func shutdown(sink: Sink) {
         let dropped: [Int] = state.withLock { st in
             st.shuttingDown = true
             let dropped = st.queue.map(\.id)
@@ -254,7 +259,7 @@ final class Worker: @unchecked Sendable {
         pending.signal()
         loopDone.wait()
         for id in dropped {
-            Wire.emit(["type": "done", "id": id, "finishReason": "cancel"])
+            Wire.emit(to: sink, ["type": "done", "id": id, "finishReason": "cancel"])
         }
     }
 
@@ -302,7 +307,7 @@ final class Worker: @unchecked Sendable {
         // generation task is created — nothing was there to cancel(), so
         // resolve it here instead of generating.
         if state.withLock({ $0.cancelledId == request.id }) {
-            Wire.emit(["type": "done", "id": request.id, "finishReason": "cancel"])
+            Wire.emit(to: request.sink, ["type": "done", "id": request.id, "finishReason": "cancel"])
             return
         }
         var promptTokens = 0
@@ -342,7 +347,7 @@ final class Worker: @unchecked Sendable {
                         buffer += piece
                         let (safe, hit) = Wire.splitSafe(buffer, stops: request.stops)
                         if !safe.isEmpty {
-                            Wire.emit(["type": "token", "text": safe])
+                            Wire.emit(to: request.sink, ["type": "token", "id": request.id, "text": safe])
                             buffer = String(buffer.dropFirst(safe.count))
                         }
                         if hit {
@@ -364,7 +369,7 @@ final class Worker: @unchecked Sendable {
             // teardown.
             await producer.value
             let (safe, _) = Wire.splitSafe(buffer, stops: request.stops)
-            if !safe.isEmpty { Wire.emit(["type": "token", "text": safe]) }
+            if !safe.isEmpty { Wire.emit(to: request.sink, ["type": "token", "id": request.id, "text": safe]) }
             // A cancelled task ends the stream without an .info event.
             if Task.isCancelled && !stopHit { finishReason = "cancel" }
             if stopHit || finishReason == "cancel" {
@@ -383,11 +388,11 @@ final class Worker: @unchecked Sendable {
             } else {
                 // The ovgenai contract reports a failed generation with a
                 // single error event — no done event follows.
-                Wire.emitError(id: request.id, "generate failed: \(error)")
+                Wire.emitError(to: request.sink, id: request.id, "generate failed: \(error)")
                 return
             }
         }
-        Wire.emit(["type": "done", "id": request.id, "finishReason": finishReason,
+        Wire.emit(to: request.sink, ["type": "done", "id": request.id, "finishReason": finishReason,
                    "promptTokens": promptTokens, "cachedTokens": cachedTokens])
     }
 }
@@ -399,42 +404,126 @@ do {
     container = try await LLMModelFactory.shared.loadContainer(
         from: URL(filePath: modelDir), using: #huggingFaceTokenizerLoader())
 } catch {
-    Wire.emitError(id: nil, "model load failed: \(error)")
+    Wire.emitError(to: Sink(fd: 1), id: nil, "model load failed: \(error)")
     exit(1)
 }
-Wire.emit(["type": "ready", "model": modelDir, "device": "gpu", "ctx": ctx])
+
+signal(SIGPIPE, SIG_IGN)
+
+var listenFd: Int32?
+var listenIsTcp = false
+var listenPort: UInt16?
+if !listenPath.isEmpty {
+    do {
+        listenFd = try listenUnix(path: listenPath)
+    } catch ListenFailure.busy {
+        stderrLog("listen endpoint already in use: \(listenPath)")
+        Wire.emitError(to: Sink(fd: 1), id: nil, "listen endpoint already in use: \(listenPath)")
+        exit(1)
+    } catch {
+        stderrLog("listen setup failed: \(error)")
+        Wire.emitError(to: Sink(fd: 1), id: nil, "listen setup failed: \(listenPath)")
+        exit(2)
+    }
+} else if listenTcpPort >= 0 {
+    do {
+        let (fd, port) = try listenTcp(port: UInt16(listenTcpPort))
+        listenFd = fd
+        listenPort = port
+        listenIsTcp = true
+    } catch ListenFailure.busy {
+        stderrLog("listen port already in use: \(listenTcpPort)")
+        Wire.emitError(to: Sink(fd: 1), id: nil, "listen port already in use: \(listenTcpPort)")
+        exit(1)
+    } catch {
+        stderrLog("listen setup failed: \(error)")
+        Wire.emitError(to: Sink(fd: 1), id: nil, "listen setup failed on port \(listenTcpPort)")
+        exit(2)
+    }
+}
+
+var readyLine: [String: Any] = [
+    "type": "ready",
+    "model": modelDir,
+    "device": "gpu",
+    "ctx": ctx,
+    "pid": ProcessInfo.processInfo.processIdentifier,
+]
+if let listenPort { readyLine["port"] = Int(listenPort) }
+
+func broadcastReady(to sink: Sink) {
+    Wire.emit(to: sink, readyLine)
+}
+
+let stdinClient = Client(fd: 0, needsAuth: false, label: "stdio client")
+clients.add(stdinClient)
+registerSinkOwner(stdinClient.sink, client: stdinClient)
+Wire.emit(to: stdinClient.sink, readyLine)
 worker.run(container: container)
 
-// Blocking line reads on the main thread: request handling is synchronous
-// (generation runs in its own detached task), so a read blocked on stdin
-// never delays an in-flight generation — mirroring the ovgenai runner.
-while true {
-    guard let line = readLine() else { break }
+clients.onLastClientLeft = { reason in
+    stderrLog("self-exit: \(reason)")
+    Thread(block: {
+        worker.shutdown(sink: discardSink)
+        exit(0)
+    }).start()
+}
+
+func handleLine(_ line: String, client: Client) {
     guard let data = line.data(using: .utf8),
           let message = try? JSONDecoder().decode(InMessage.self, from: data) else {
-        Wire.emitError(id: nil, "unparseable request")
-        continue
+        Wire.emitError(to: client.sink, id: nil, "unparseable request")
+        return
+    }
+    // The auth gate applies to TCP only: a localhost port is reachable by
+    // any local user, a unix socket and the spawner's stdin are not.
+    if client.needsAuth && !client.isAuthenticated() {
+        if message.type == "auth", let token = message.token, client.tryAuth(token, against: authToken) {
+            return
+        }
+        Wire.emitError(to: client.sink, id: nil, "authentication required: send {\"type\":\"auth\",\"token\":...} first")
+        dropClient(client, reason: "authentication failed")
+        return
     }
     switch message.type {
+    case "auth":
+        break
     case "generate":
         guard let id = message.id, let prompt = message.prompt else {
-            Wire.emitError(id: message.id, "generate requires id and prompt")
-            continue
+            Wire.emitError(to: client.sink, id: message.id, "generate requires id and prompt")
+            return
         }
         worker.enqueue(Request(
             id: id,
             prompt: prompt,
             maxTokens: message.maxTokens ?? 128,
             stops: message.stop ?? [],
-            cache: message.cache ?? false))
+            cache: message.cache ?? false,
+            sink: client.sink))
     case "cancel":
-        worker.cancel(message.id)
+        worker.cancel(message.id, sink: client.sink)
     case "shutdown":
-        worker.shutdown()
+        worker.shutdown(sink: client.sink)
         exit(0)
     default:
-        Wire.emitError(id: message.id, "unknown request type \(message.type)")
+        Wire.emitError(to: client.sink, id: message.id, "unknown request type \(message.type)")
     }
 }
-worker.shutdown()
-exit(0)
+
+if let listenFd {
+    serveListener(fd: listenFd, isTcp: listenIsTcp, handleLine: handleLine)
+}
+
+// Blocking line reads on a dedicated thread: request handling is synchronous
+// (generation runs in its own detached task), so a read blocked on stdin
+// never delays an in-flight generation — mirroring the ovgenai runner. The
+// spawner's stdio counts as a client even in listen mode: a stdin nobody
+// read silently froze the spawning window's completions (openvino pitfall).
+spawnThread {
+    let reader = LineReader(fd: 0)
+    while let line = reader.nextLine() {
+        handleLine(line, stdinClient)
+    }
+    dropClient(stdinClient, reason: "stdin closed")
+}
+dispatchMain()
