@@ -25,6 +25,12 @@ jobs:
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: cache swift build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: swift-build-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: swift-build-${{ runner.os }}-
       - name: build and smoke
         run: task ci
       - name: upload artifact
