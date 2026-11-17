@@ -112,7 +112,7 @@ let clients = Clients()
 /// Events with nobody left to reach (the self-exit drain) go here.
 let discardSink = Sink(fd: -1)
 
-private final class SinkOwnerRegistry: @unchecked Sendable {
+final class SinkOwnerRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private var owners: [ObjectIdentifier: Client] = [:]
 
