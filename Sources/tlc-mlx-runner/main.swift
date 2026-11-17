@@ -460,7 +460,10 @@ if let listenPort { readyLine["port"] = Int(listenPort) }
     Wire.emit(to: sink, readyLine)
 }
 
-let stdinClient = Client(fd: 0, needsAuth: false, label: "stdio client")
+// The stdio client reads requests from stdin (fd 0, in the reader thread
+// below) but writes events to stdout (fd 1): fd 0 is the read end of the
+// spawner's pipe and a write there fails with EBADF, dropping the client.
+let stdinClient = Client(fd: 1, needsAuth: false, label: "stdio client")
 clients.add(stdinClient)
 sinkOwners.register(stdinClient.sink, client: stdinClient)
 Wire.emit(to: stdinClient.sink, readyLine)
@@ -531,4 +534,8 @@ spawnThread {
     }
     dropClient(stdinClient, reason: "stdin closed")
 }
-dispatchMain()
+// Top-level code resumes off the main thread after the awaited model load,
+// and dispatchMain() traps (EXC_BREAKPOINT) off the main thread. The process
+// must stay alive until an exit() on the shutdown/self-exit paths; block this
+// async context on a continuation that is never resumed.
+await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }
