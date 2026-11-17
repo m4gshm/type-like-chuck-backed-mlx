@@ -100,10 +100,34 @@ tasks:
     cmds:
       - python3 scripts/e2e.py test${MODEL_DIR:+ --model "$MODEL_DIR"}
 
+  e2e:full:
+    desc: Full e2e suite with the test model (downloads it into .cache/models once, then reuses)
+    env:
+      MODEL_DIR: '.cache/models/qwen2.5-coder-0.5b-4bit'
+    cmds:
+      - task: e2e:download-model
+      - python3 scripts/e2e.py test --model '{{.MODEL_DIR}}'
+
   e2e:download-model:
     desc: Download the default E2E test model (Qwen2.5-Coder-0.5B 4-bit) into .cache/models/
+    status:
+      - test -d .cache/models/qwen2.5-coder-0.5b-4bit
     cmds:
       - python3 scripts/e2e.py download-model
+
+  ci:full:
+    desc: Full local CI cycle on this machine — build, smokes and the complete e2e suite with a real model (what CI does, no runner queue)
+    cmds:
+      - task: build
+      - task: smoke
+      - task: smoke:version
+      - task: e2e:full
+
+  release:local:
+    desc: Cut a release fully locally when GitHub macos runners are unavailable — full test cycle, then pack and upload the release asset (HEAD must sit exactly on the pushed tag)
+    cmds:
+      - task: ci:full
+      - task: release:upload
 
   e2e:bench:
     desc: E2E benchmark — model load time + inference speed for 4-bit/8-bit 0.5B/1.5B/3B/7B (SIZES=a,b filters)
