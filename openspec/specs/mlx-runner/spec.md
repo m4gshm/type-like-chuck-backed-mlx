@@ -18,7 +18,7 @@ The repository SHALL produce a self-contained macOS arm64 runner binary named `t
 - **THEN** CI builds the binary, smoke-tests it, and attaches `tlc-mlx-runner-macos-arm64` to a GitHub release
 
 ### Requirement: NDJSON stdio protocol
-The runner SHALL read one request per stdin line as a JSON object (`generate` with `id`/`prompt`/`maxTokens`/`stop`, an optional `cache` flag defaulting to false, `cancel`, `shutdown`) and SHALL write newline-delimited JSON events to stdout: a `version` event for `--version`, one `token` event (without id) per generated text piece, one `done` event at the end of a generation carrying `promptTokens` (the tokenized prompt length) and `cachedTokens` (prompt tokens served from the retained KV cache; 0 without reuse), and `error` events on failures. Human-readable logs SHALL go to stderr only. With missing or invalid arguments the runner SHALL emit one `error` event and exit with code 2.
+The runner SHALL read one request per stdin line as a JSON object (`generate` with `id`/`prompt`/`maxTokens`/`stop`, an optional `cache` flag defaulting to false, `cancel`, `shutdown`) and SHALL write newline-delimited JSON events to stdout: a `version` event for `--version`, one `token` event (with the request `id`) per generated text piece, one `done` event at the end of a generation carrying `promptTokens` (the tokenized prompt length) and `cachedTokens` (prompt tokens served from the retained KV cache; 0 without reuse), and `error` events on failures. Human-readable logs SHALL go to stderr only. With missing or invalid arguments the runner SHALL emit one `error` event and exit with code 2. When started with `--listen <endpoint>` the same protocol SHALL be served over a unix domain socket per the `runner-sharing` capability, with no TCP port and no API key.
 
 #### Scenario: Version
 - **WHEN** the runner is started with `--version`
@@ -34,7 +34,7 @@ The runner SHALL read one request per stdin line as a JSON object (`generate` wi
 
 #### Scenario: Queued requests
 - **WHEN** a `generate` request arrives while a generation is in progress
-- **THEN** it is queued and served after the active generation, in arrival order
+- **THEN** it is queued and served after the active generation, in arrival order, and `token` events carry the `id` of the request being generated, so a multi-client (listen-mode) session never routes tokens to the wrong client
 
 #### Scenario: Cancel active generation
 - **WHEN** a `cancel` request arrives mid-generation
