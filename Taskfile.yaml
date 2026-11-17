@@ -123,6 +123,12 @@ tasks:
       - task: smoke:version
       - task: e2e:full
 
+  release:local:
+    desc: Cut a release fully locally when GitHub macos runners are unavailable — full test cycle, then pack and upload the release asset (HEAD must sit exactly on the pushed tag)
+    cmds:
+      - task: ci:full
+      - task: release:upload
+
   e2e:bench:
     desc: E2E benchmark — model load time + inference speed for 4-bit/8-bit 0.5B/1.5B/3B/7B (SIZES=a,b filters)
     deps: [build]
