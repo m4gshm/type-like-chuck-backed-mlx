@@ -58,11 +58,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # A pushed tag publishes immediately: refuse when it is not on main,
-      # so experimental branches cannot ship releases by accident.
+      # so experimental branches cannot ship releases by accident. The job
+      # has no checkout: fetch by URL (a bare git init has no origin).
       - name: verify the tag is on main
         run: |
           git init -q .
-          git fetch -q origin main
+          git fetch -q "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" main
           git merge-base --is-ancestor "${GITHUB_SHA}" origin/main || {
             echo "::error::tag ${GITHUB_REF_NAME} is not on main — release refused; tag the merge commit on main instead"
             exit 1
