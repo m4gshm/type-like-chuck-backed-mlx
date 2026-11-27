@@ -537,5 +537,6 @@ spawnThread {
 // Top-level code resumes off the main thread after the awaited model load,
 // and dispatchMain() traps (EXC_BREAKPOINT) off the main thread. The process
 // must stay alive until an exit() on the shutdown/self-exit paths; block this
-// async context on a continuation that is never resumed.
-await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }
+// async context on a continuation that is never resumed. Unsafe: the checked
+// variant makes the runtime log a continuation-misuse warning on every start.
+await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
